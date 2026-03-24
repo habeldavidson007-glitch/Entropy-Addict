@@ -1,16 +1,12 @@
 extends Node
 
-# Player Identity
 var player_name: String = "Traveler"
 var player_color: Color = Color(0.2, 0.8, 0.4)
 var player_emoticon: String = "◈"
 var starting_region: String = ""
 var first_habit: String = ""
-
-# API Settings
 var groq_api_key: String = "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"
 
-# World Regions
 var regions: Dictionary = {
 	"Ashveld Flats": {
 		"description": "A barren, wind-swept plain. Dangerous but open.",
@@ -36,29 +32,3 @@ var regions: Dictionary = {
 
 func get_spawn_position() -> Vector2:
 	return Vector2(20, 20)
-
-func save_game():
-	var file = FileAccess.open("user://data.save", FileAccess.WRITE)
-	if file:
-		var data = {
-			"name": player_name,
-			"color": player_color.to_html(),
-			"emoticon": player_emoticon,
-			"region": starting_region,
-			"habit": first_habit
-		}
-		file.store_string(JSON.stringify(data))
-
-func load_game():
-	if not FileAccess.file_exists("user://data.save"):
-		return
-	var file = FileAccess.open("user://data.save", FileAccess.READ)
-	var json = JSON.new()
-	var parse = json.parse(file.get_as_text())
-	if parse == OK:
-		var data = json.get_data()
-		player_name = data.get("name", player_name)
-		player_color = Color.html(data.get("color", player_color.to_html()))
-		player_emoticon = data.get("emoticon", player_emoticon)
-		starting_region = data.get("region", starting_region)
-		first_habit = data.get("habit", first_habit)

@@ -1,0 +1,16 @@
+[gd_scene format=3 uid="uid://bakc5ol2516lu"]
+
+[ext_resource type="Script" uid="uid://b2fs6nmhfgj0s" path="res://character_body_2d.gd" id="1_f3sb7"]
+
+[node name="Node2D" type="Node2D" unique_id=285787817]
+
+[node name="CharacterBody2D" type="CharacterBody2D" parent="." unique_id=563573226]
+script = ExtResource("1_f3sb7")
+
+[node name="ColorRect" type="ColorRect" parent="CharacterBody2D" unique_id=548975089]
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="CharacterBody2D/ColorRect" unique_id=381077149]
+
+[node name="Camera2D" type="Camera2D" parent="CharacterBody2D/ColorRect/CollisionShape2D" unique_id=1252189064]
