@@ -1,0 +1,124 @@
+[gd_scene format=3 uid="uid://xhyrxuqi3v6t"]
+
+[ext_resource type="Script" uid="uid://77tkjg14gt4m" path="res://scripts/ui/CodexUI.gd" id="1_628kq"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_t6rk6"]
+content_margin_left = 0.0
+content_margin_top = 0.0
+content_margin_right = 0.0
+content_margin_bottom = 0.0
+bg_color = Color(0.101960786, 0.101960786, 0.101960786, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+corner_detail = 5
+expand_margin_left = 100.0
+expand_margin_top = 50.0
+expand_margin_right = 100.0
+expand_margin_bottom = 50.0
+
+[node name="CodexUI" type="Control" unique_id=457589360]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_628kq")
+
+[node name="MarginContainer" type="Panel" parent="." unique_id=909227891]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_t6rk6")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="MarginContainer" unique_id=368856675]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 10
+
+[node name="Header" type="HBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=1057606210]
+layout_mode = 2
+
+[node name="NameLabel" type="Label" parent="MarginContainer/VBoxContainer/Header" unique_id=1652036911]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 16
+
+[node name="LevelLabel" type="Label" parent="MarginContainer/VBoxContainer/Header" unique_id=1866529757]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+
+[node name="XPBar" type="ProgressBar" parent="MarginContainer/VBoxContainer/Header" unique_id=615591533]
+layout_mode = 2
+
+[node name="CallLabel" type="Label" parent="MarginContainer/VBoxContainer/Header" unique_id=53241153]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+
+[node name="FateLabel" type="Label" parent="MarginContainer/VBoxContainer/Header" unique_id=443064106]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+
+[node name="RoleLabel" type="Label" parent="MarginContainer/VBoxContainer/Header" unique_id=972082102]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+
+[node name="Masteries" type="VBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=500338949]
+layout_mode = 2
+
+[node name="Mastery1Label" type="Label" parent="MarginContainer/VBoxContainer/Masteries" unique_id=1692549472]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+text = "Mind (Lv. 0)
+"
+
+[node name="Mastery2Label" type="Label" parent="MarginContainer/VBoxContainer/Masteries" unique_id=1073951544]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+text = "Weapon (Lv. 0)"
+
+[node name="Root" type="VBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=712598682]
+layout_mode = 2
+
+[node name="ProgressBar" type="ProgressBar" parent="MarginContainer/VBoxContainer/Root" unique_id=924260715]
+layout_mode = 2
+
+[node name="StageLabel" type="Label" parent="MarginContainer/VBoxContainer/Root" unique_id=1801692415]
+layout_mode = 2
+text = "Root Stage: Habit"
+
+[node name="Skills" type="VBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=1669296270]
+layout_mode = 2
+
+[node name="ActiveSkills" type="HBoxContainer" parent="MarginContainer/VBoxContainer/Skills" unique_id=170419983]
+layout_mode = 2
+
+[node name="PassiveSkills" type="HBoxContainer" parent="MarginContainer/VBoxContainer/Skills" unique_id=1186514529]
+layout_mode = 2
+
+[node name="Habits" type="VBoxContainer" parent="MarginContainer/VBoxContainer" unique_id=429548627]
+layout_mode = 2
+
+[node name="HabitLogLabel" type="Label" parent="MarginContainer/VBoxContainer/Habits" unique_id=2082224430]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+text = "No habits recorded."
+
+[node name="TestLabel" type="Label" parent="MarginContainer/VBoxContainer" unique_id=1399760848]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+
+[node name="DEBUG_LABEL" type="Label" parent="MarginContainer/VBoxContainer" unique_id=2059904229]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+text = "IT WORKS!"

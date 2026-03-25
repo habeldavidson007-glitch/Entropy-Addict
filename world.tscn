@@ -1,10 +1,24 @@
 [gd_scene format=3 uid="uid://bakc5ol2516lu"]
 
-[ext_resource type="Script" uid="uid://b2fs6nmhfgj0s" path="res://character_body_2d.gd" id="1_f3sb7"]
+[ext_resource type="Script" uid="uid://b2fs6nmhfgj0s" path="res://scripts/player/character_body_2d.gd" id="1_f3sb7"]
 [ext_resource type="Script" uid="uid://87s0ljek3ubp" path="res://world.gd" id="1_fj7yv"]
+[ext_resource type="Script" uid="uid://77tkjg14gt4m" path="res://scripts/ui/CodexUI.gd" id="3_tlwt5"]
 
 [node name="Node2D" type="Node2D" unique_id=285787817]
 script = ExtResource("1_fj7yv")
 
 [node name="CharacterBody2D" type="CharacterBody2D" parent="." unique_id=563573226]
 script = ExtResource("1_f3sb7")
+
+[node name="CodexUI" type="Control" parent="CharacterBody2D" unique_id=1260288556]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("3_tlwt5")
+
+[node name="Camera2D" type="Camera2D" parent="." unique_id=619985589]
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=1133123674]
+
+[node name="CanvasLayer" type="CanvasLayer" parent="." unique_id=1995656793]

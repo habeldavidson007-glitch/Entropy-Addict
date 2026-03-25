@@ -1,7 +1,7 @@
 extends Node
 
 # ─────────────────────────────────────────
-# PLAYER IDENTITY
+# PLAYER IDENTITY	
 # ─────────────────────────────────────────
 var player_name: String = ""
 var player_color: Color = Color(0.2, 0.8, 0.4)
@@ -10,13 +10,337 @@ var starting_region: String = ""
 var first_habit: String = ""
 
 # ─────────────────────────────────────────
-# GROQ API KEY
-# Get yours free at: console.groq.com/keys
+# GROQ API — Call Generation
 # ─────────────────────────────────────────
-var groq_api_key: String = 
+var groq_api_key: String = ""
+var groq_model: String = "llama-3.1-8b-instant"
 
 # ─────────────────────────────────────────
-# ALL 8 REGIONS — MASTER BIBLE CANONICAL
+# LEVEL & XP SYSTEM
+# ─────────────────────────────────────────
+var player_level: int = 1
+var player_xp: int = 0
+var xp_to_next_level: int = 150
+var stat_points: int = 0
+
+# ─────────────────────────────────────────
+# ATTRIBUTES (Start at 5, can grow beyond)
+# ─────────────────────────────────────────
+var stats: Dictionary = {
+	"physic": 5,
+	"dexterity": 5,
+	"intellect": 5,
+	"luck": 5
+}
+
+const BASE_STAT_VALUE: int = 5
+const STAT_POINTS_PER_LEVEL: int = 3
+const XP_SCALING_FACTOR: float = 1.8
+
+const STAT_POINT_DESCRIPTIONS: Dictionary = {
+	"physic": "HP +10, Damage +2, Defense +1 per point",
+	"dexterity": "Initiative +5%, Evasion +3% per point",
+	"intellect": "XP Gain +10%, Skill Power +5% per point",
+	"luck": "Crit +2%, Drop Rate +5%, Flee +3% per point"
+}
+
+# ─────────────────────────────────────────
+# EXPLORATION SYSTEM
+# ─────────────────────────────────────────
+var total_map_tiles: int = 0
+var explored_tiles_count: int = 0
+var exploration_percentage: float = 0.0
+var familiar_environment_bonus: int = 0
+var last_milestone: int = 0
+const EXPLORATION_XP_BASE: int = 1
+
+# ─────────────────────────────────────────
+# ALPHA/SUBDUE SYSTEM
+# ─────────────────────────────────────────
+var subdued_enemies: Array = []
+var alpha_recruits: Array = []
+var generated_enemy_names: Dictionary = {}  # pos -> real_name
+
+const SUBDUE_MIN_HP: float = 0.10
+const SUBDUE_MAX_HP: float = 0.30
+const SUBDUE_BASE_CHANCE: float = 0.25
+const SUBDUE_LUCK_BONUS: float = 0.03
+
+# ─────────────────────────────────────────
+# DERIVED STATS
+# ─────────────────────────────────────────
+func get_max_hp() -> int:
+	return 80 + ((stats["physic"] - BASE_STAT_VALUE) * 10)
+
+func get_base_damage() -> int:
+	return 8 + ((stats["physic"] - BASE_STAT_VALUE) * 2)
+
+func get_base_defense() -> int:
+	return 2 + ((stats["physic"] - BASE_STAT_VALUE) * 1)
+
+func get_initiative_bonus() -> float:
+	return 0.0 + ((stats["dexterity"] - BASE_STAT_VALUE) * 0.05)
+
+func get_evasion_chance() -> float:
+	return 0.05 + ((stats["dexterity"] - BASE_STAT_VALUE) * 0.03)
+
+func get_xp_bonus() -> float:
+	return 0.0 + ((stats["intellect"] - BASE_STAT_VALUE) * 0.10)
+
+func get_crit_chance() -> float:
+	return 0.05 + ((stats["luck"] - BASE_STAT_VALUE) * 0.02)
+
+func get_drop_bonus() -> float:
+	return 0.0 + ((stats["luck"] - BASE_STAT_VALUE) * 0.05)
+
+func get_flee_bonus() -> float:
+	return 0.0 + ((stats["luck"] - BASE_STAT_VALUE) * 0.03)
+
+func get_subdue_chance() -> float:
+	var luck_bonus = max(0, stats["luck"] - BASE_STAT_VALUE) * SUBDUE_LUCK_BONUS
+	return SUBDUE_BASE_CHANCE + luck_bonus
+
+# ─────────────────────────────────────────
+# XP & LEVEL FUNCTIONS
+# ─────────────────────────────────────────
+func add_xp(amount: int) -> bool:
+	var bonus = int(amount * get_xp_bonus())
+	player_xp += amount + bonus
+	
+	if player_xp >= xp_to_next_level:
+		level_up()
+		return true
+	return false
+
+func level_up() -> void:
+	player_level += 1
+	player_xp -= xp_to_next_level
+	xp_to_next_level = int(xp_to_next_level * XP_SCALING_FACTOR)
+	stat_points += STAT_POINTS_PER_LEVEL
+	print("★ Level Up! Now level %d | Stat Points: %d" % [player_level, stat_points])
+
+func get_xp_progress() -> float:
+	if xp_to_next_level == 0:
+		return 1.0
+	return clamp(float(player_xp) / float(xp_to_next_level), 0.0, 1.0)
+
+func can_increase_stat(_stat_name: String) -> bool:
+	return stat_points > 0
+
+func increase_stat(stat_name: String) -> bool:
+	if can_increase_stat(stat_name):
+		stats[stat_name] += 1
+		stat_points -= 1
+		return true
+	return false
+
+func decrease_stat(stat_name: String) -> bool:
+	if stats.get(stat_name, BASE_STAT_VALUE) > BASE_STAT_VALUE:
+		stats[stat_name] -= 1
+		stat_points += 1
+		return true
+	return false
+
+# ─────────────────────────────────────────
+# EXPLORATION FUNCTIONS
+# ─────────────────────────────────────────
+func add_explored_tile() -> void:
+	if total_map_tiles == 0:
+		return
+	explored_tiles_count += 1
+	calculate_exploration_percentage()
+	add_xp(EXPLORATION_XP_BASE)
+
+func calculate_exploration_percentage() -> void:
+	if total_map_tiles == 0:
+		exploration_percentage = 0.0
+		return
+	exploration_percentage = (float(explored_tiles_count) / float(total_map_tiles)) * 100.0
+	check_exploration_milestones()
+
+func check_exploration_milestones() -> void:
+	var current_milestone = int(exploration_percentage / 10.0)
+	if current_milestone > last_milestone and current_milestone <= 10:
+		familiar_environment_bonus += 10
+		last_milestone = current_milestone
+		print("🌍 FAMILIAR ENVIRONMENT BONUS: +%d" % 10)
+
+func get_exploration_display() -> String:
+	return "%.1f%%" % exploration_percentage
+
+func reset_exploration() -> void:
+	explored_tiles_count = 0
+	exploration_percentage = 0.0
+	familiar_environment_bonus = 0
+	last_milestone = 0
+
+# ─────────────────────────────────────────
+# CALL SYSTEM — Groq API Generation
+# ─────────────────────────────────────────
+func generate_call(enemy_type: String, enemy_hp_percent: float) -> String:
+	if groq_api_key == "":
+		return _get_fallback_call(enemy_type, enemy_hp_percent)
+	
+	var prompt = """You are a game system generating short, poetic character labels called "Calls".
+Rules:
+- Return ONLY the Call text, nothing else
+- Format: "Short phrase, short phrase" (max 6 words total)
+- Tone: dry, grounded, slightly melancholic
+- Based on: {enemy_type} at {hp}% health
+Examples:
+- "Strong body, weak mind"
+- "Eyes that miss nothing"
+- "Hands that remember war"
+- "Feet that know the road"
+Generate one Call:""".format({
+		"enemy_type": enemy_type,
+		"hp": int(enemy_hp_percent * 100)
+	})
+	
+	var url = "https://api.groq.com/openai/v1/chat/completions"
+	var headers = [
+		"Authorization: Bearer " + groq_api_key,
+		"Content-Type: application/json"
+	]
+	var body = JSON.stringify({
+		"model": groq_model,
+		"messages": [{"role": "user", "content": prompt}],
+		"temperature": 0.7,
+		"max_tokens": 30
+	})
+	
+	var http = HTTPRequest.new()
+	add_child(http)
+	http.request(url, headers, HTTPClient.METHOD_POST, body)
+	var result = await http.request_completed
+	
+	if result[1] == 200:
+		var json = JSON.new()
+		if json.parse(result[3].get_string_from_utf8()) == OK:
+			var response = json.get_data()
+			var generated_call = response.get("choices", [{}])[0].get("message", {}).get("content", "").strip_edges()
+			generated_call = generated_call.trim_prefix('"').trim_suffix('"')
+			http.queue_free()
+			return generated_call if generated_call != "" else _get_fallback_call(enemy_type, enemy_hp_percent)
+	
+	http.queue_free()
+	return _get_fallback_call(enemy_type, enemy_hp_percent)
+
+func _get_fallback_call(_enemy_type: String, _hp_percent: float) -> String:
+	"""Fallback Calls with true randomization - more variety"""
+	var calls = [
+		# Physical/Combat focused
+		"Strong body, weak mind",
+		"Hands that know the blade",
+		"Feet that never rest",
+		"Scars that tell no tales",
+		"Strength without direction",
+		"A will that bends, not breaks",
+		
+		# Observant/Quiet types
+		"Eyes that watch the wind",
+		"Silent steps, loud intent",
+		"The quiet before the storm",
+		"Watches more than speaks",
+		
+		# Survivor types
+		"Born to wander, destined to fall",
+		"Outlived three winters",
+		"The road made them hard",
+		"Survival is their only craft",
+		
+		# Psychological
+		"A mind that calculates, a heart that hesitates",
+		"Trusts no one, needs everyone",
+		"Remembers every loss",
+		"Fights for something lost",
+		
+		# Mysterious
+		"Carries a name they won't share",
+		"Hides more than shows",
+		"The past follows close",
+		"Not who they appear"
+	]
+	
+	# True randomization - not based on HP
+	var random_index = randi() % calls.size()
+	return calls[random_index]
+
+# ─────────────────────────────────────────
+# ENEMY NAME GENERATION
+# ─────────────────────────────────────────
+func generate_enemy_real_name() -> String:
+	"""Generate a realistic name for subdued enemies"""
+	var first_names = [
+		"Ghiar", "Maren", "Voss", "Kael", "Ryn", "Tessa", "Durn", "Hals",
+		"Varek", "Senne", "Renk", "Bran", "Essa", "Tom", "Ille", "Deva",
+		"Jarger", "Maret", "Ossel", "Ferren", "Rogic", "Vorren", "Orren",
+		"Halvec", "Ash", "Rel", "Dun", "Vas", "Mert", "Cur"
+	]
+	
+	var last_names = [
+		"of the Flats", "Ash-born", "the Wanderer", "the Broken",
+		"the Silent", "the Watcher", "the Lost", "the Survivor",
+		"of the Road", "the Exile", "the Remnant", "the Lone",
+		"the Unnamed", "the Forgotten", "the Last", "the First"
+	]
+	
+	var first = first_names[randi() % first_names.size()]
+	var last = last_names[randi() % last_names.size()]
+	
+	# 30% chance for just first name
+	if randf() < 0.3:
+		return first
+	else:
+		return first + " " + last
+
+func get_or_generate_enemy_name(pos: Vector2) -> String:
+	"""Get existing name or generate new one"""
+	if generated_enemy_names.has(pos):
+		return generated_enemy_names[pos]
+	
+	var new_name = generate_enemy_real_name()
+	generated_enemy_names[pos] = new_name
+	return new_name
+
+func clear_enemy_name(pos: Vector2) -> void:
+	"""Clear name when enemy is removed"""
+	generated_enemy_names.erase(pos)
+
+# ─────────────────────────────────────────
+# SUBDUE SYSTEM
+# ─────────────────────────────────────────
+func can_subdue(enemy_hp_percent: float) -> bool:
+	return enemy_hp_percent >= SUBDUE_MIN_HP and enemy_hp_percent <= SUBDUE_MAX_HP
+
+func attempt_subdue(enemy_name: String, enemy_call: String, enemy_type: String) -> bool:
+	var roll = randf()
+	var chance = get_subdue_chance()
+	
+	if roll < chance:
+		subdued_enemies.append({
+			"name": enemy_name,
+			"call": enemy_call,
+			"type": enemy_type,
+			"subdued_at_level": player_level,
+			"potential_alpha": randf() < 0.3
+		})
+		print("✅ Subdued: %s — '%s'" % [enemy_name, enemy_call])
+		return true
+	else:
+		print("❌ Subdue failed — enemy escapes")
+		return false
+
+func recruit_as_alpha(enemy_data: Dictionary) -> bool:
+	if enemy_data.get("potential_alpha", false):
+		alpha_recruits.append(enemy_data)
+		subdued_enemies.erase(enemy_data)
+		print("🎯 %s joins as Delegated Alpha" % enemy_data.name)
+		return true
+	return false
+
+# ─────────────────────────────────────────
+# REGIONS
 # ─────────────────────────────────────────
 var regions: Dictionary = {
 	"Ashveld Flats": {
@@ -80,7 +404,19 @@ func save_game() -> void:
 			"color": player_color.to_html(),
 			"emoticon": player_emoticon,
 			"region": starting_region,
-			"habit": first_habit
+			"habit": first_habit,
+			"level": player_level,
+			"xp": player_xp,
+			"xp_next": xp_to_next_level,
+			"stat_points": stat_points,
+			"stats": stats,
+			"explored_tiles": explored_tiles_count,
+			"total_tiles": total_map_tiles,
+			"familiar_bonus": familiar_environment_bonus,
+			"last_milestone": last_milestone,
+			"subdued_enemies": subdued_enemies,
+			"alpha_recruits": alpha_recruits,
+			"groq_key_set": groq_api_key != ""
 		}
 		file.store_string(JSON.stringify(data))
 
@@ -93,11 +429,30 @@ func load_game() -> void:
 	var json := JSON.new()
 	if json.parse(file.get_as_text()) == OK:
 		var data: Dictionary = json.get_data()
-		player_name     = data.get("name",     player_name)
-		player_color    = Color.html(data.get("color", player_color.to_html()))
+		player_name = data.get("name", player_name)
+		player_color = Color.html(data.get("color", player_color.to_html()))
 		player_emoticon = data.get("emoticon", player_emoticon)
-		starting_region = data.get("region",   starting_region)
-		first_habit     = data.get("habit",    first_habit)
+		starting_region = data.get("region", starting_region)
+		first_habit = data.get("habit", first_habit)
+		player_level = data.get("level", 1)
+		player_xp = data.get("xp", 0)
+		xp_to_next_level = data.get("xp_next", 150)
+		stat_points = data.get("stat_points", 0)
+		stats = data.get("stats", {
+			"physic": BASE_STAT_VALUE,
+			"dexterity": BASE_STAT_VALUE,
+			"intellect": BASE_STAT_VALUE,
+			"luck": BASE_STAT_VALUE
+		})
+		explored_tiles_count = data.get("explored_tiles", 0)
+		total_map_tiles = data.get("total_tiles", 0)
+		familiar_environment_bonus = data.get("familiar_bonus", 0)
+		last_milestone = data.get("last_milestone", 0)
+		subdued_enemies = data.get("subdued_enemies", [])
+		alpha_recruits = data.get("alpha_recruits", [])
+		if data.get("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", false):
+			print("🔑 Groq API key loaded from save")
+		calculate_exploration_percentage()
 
 # ─────────────────────────────────────────
 # HELPERS
@@ -106,3 +461,22 @@ func get_spawn_position() -> Vector2:
 	if starting_region in regions:
 		return regions[starting_region]["spawn"]
 	return Vector2(20, 20)
+
+func get_stat_display_name(stat: String) -> String:
+	match stat:
+		"physic": return "PHY"
+		"dexterity": return "DEX"
+		"intellect": return "INT"
+		"luck": return "LCK"
+	return stat
+
+func reset_stats_to_base() -> void:
+	stats = {
+		"physic": BASE_STAT_VALUE,
+		"dexterity": BASE_STAT_VALUE,
+		"intellect": BASE_STAT_VALUE,
+		"luck": BASE_STAT_VALUE
+	}
+	stat_points = 0
+	subdued_enemies.clear()
+	alpha_recruits.clear()
