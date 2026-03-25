@@ -13,7 +13,7 @@ var first_habit: String = ""
 # GROQ API KEY
 # Get yours free at: console.groq.com/keys
 # ─────────────────────────────────────────
-var groq_api_key: String = "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"
+var groq_api_key: String = 
 
 # ─────────────────────────────────────────
 # ALL 8 REGIONS — MASTER BIBLE CANONICAL
