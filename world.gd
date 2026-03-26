@@ -757,79 +757,73 @@ func _show_level_up_world_effect() -> void:
 # ─────────────────────────────────────────
 func get_save_data() -> Dictionary:
 	return {
-
-# ─────────────────────────────────────────
-# SAVE/LOAD SUPPORT
-# ─────────────────────────────────────────
-func get_save_data() -> Dictionary:
-return {
-"terrain": terrain_map,
-"enemies": enemy_data,
-"explored": explored_tiles.keys(),
-"player_grid": _player_grid,
-"version": "1.1"
-}
+		"terrain": terrain_map,
+		"enemies": enemy_data,
+		"explored": explored_tiles.keys(),
+		"player_grid": _player_grid,
+		"version": "1.1"
+	}
 
 func load_save_data(save_data: Dictionary) -> void:
-if save_data.has("terrain"):
-terrain_map = save_data.terrain
-if save_data.has("enemies"):
-enemy_data = save_data.enemies
-if save_data.has("explored"):
-for pos in save_data.explored:
-explored_tiles[pos] = true
-if save_data.has("player_grid"):
-_player_grid = save_data.player_grid
-
-# Reconnect signals after loading
-_connect_game_data_signals()
-
-queue_redraw()
-print("🗺 World loaded successfully (v%s)" % save_data.get("version", "1.0"))
+	if save_data.has("terrain"):
+		terrain_map = save_data.terrain
+	if save_data.has("enemies"):
+		enemy_data = save_data.enemies
+	if save_data.has("explored"):
+		for pos in save_data.explored:
+			explored_tiles[pos] = true
+	if save_data.has("player_grid"):
+		_player_grid = save_data.player_grid
+	
+	# Reconnect signals after loading
+	_connect_game_data_signals()
+	
+	queue_redraw()
+	print("🗺 World loaded successfully (v%s)" % save_data.get("version", "1.0"))
 
 # ─────────────────────────────────────────
 # UTILITY FUNCTIONS
 # ─────────────────────────────────────────
 func get_enemy_at_position(pos: Vector2) -> Dictionary:
-for enemy in enemy_data:
-if enemy.pos == pos:
-return enemy
-return {}
+	for enemy in enemy_data:
+		if enemy.pos == pos:
+			return enemy
+	return {}
 
 func remove_enemy_at_position(pos: Vector2) -> bool:
-for i in range(enemy_data.size()):
-if enemy_data[i].pos == pos:
-enemy_data.remove_at(i)
-return true
-return false
+	for i in range(enemy_data.size()):
+		if enemy_data[i].pos == pos:
+			enemy_data.remove_at(i)
+			return true
+	return false
 
 func get_all_visible_enemies() -> Array[Dictionary]:
-var visible: Array[Dictionary] = []
-for enemy in enemy_data:
-if visible_tiles.has(enemy.pos):
-visible.append(enemy)
-return visible
+	var visible: Array[Dictionary] = []
+	for enemy in enemy_data:
+		if visible_tiles.has(enemy.pos):
+			visible.append(enemy)
+	return visible
 
 func get_enemies_by_difficulty(difficulty: String) -> Array[Dictionary]:
-var filtered: Array[Dictionary] = []
-for enemy in enemy_data:
-if enemy.get("difficulty", "") == difficulty:
-filtered.append(enemy)
-return filtered
+	var filtered: Array[Dictionary] = []
+	for enemy in enemy_data:
+		if enemy.get("difficulty", "") == difficulty:
+			filtered.append(enemy)
+	return filtered
 
 func get_enemies_by_alpha_type(alpha_type: String) -> Array[Dictionary]:
-var filtered: Array[Dictionary] = []
-for enemy in enemy_data:
-if enemy.get("alpha_type", "") == alpha_type:
-filtered.append(enemy)
-return filtered
+	var filtered: Array[Dictionary] = []
+	for enemy in enemy_data:
+		if enemy.get("alpha_type", "") == alpha_type:
+			filtered.append(enemy)
+	return filtered
 
 func get_total_enemy_count() -> int:
-return enemy_data.size()
+	return enemy_data.size()
 
 func get_visible_enemy_count() -> int:
-var count := 0
-for enemy in enemy_data:
-if visible_tiles.has(enemy.pos):
-count += 1
-return count
+	var count := 0
+	for enemy in enemy_data:
+		if visible_tiles.has(enemy.pos):
+			count += 1
+	return count

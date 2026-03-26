@@ -1,1 +1,1 @@
-Nothing should be ignored based on the provided file changes. The only modified file is 'world.gd', which appears to be a Godot script file (source code) and should not be ignored. No build artifacts, dependencies, or temporary files are present in the changes.
+Nothing should be ignored based on the provided file changes. The only modified file is 'world.gd', which appears to be a Godot engine script file and should not be ignored. No build artifacts, dependencies, or temporary files are present in the changes.
