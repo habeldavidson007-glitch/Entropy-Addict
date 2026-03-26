@@ -2,13 +2,16 @@ extends Control
 
 # ─────────────────────────────────────────
 # COMBAT SYSTEM — Party + Subdue + Calls
+# Enhanced with signals and better party management
 # ─────────────────────────────────────────
+
+signal combat_finished(victory: bool)
 
 var player_hp: int = 100
 var enemy_hp: int = 80
 var player_max_hp: int = 100
 var enemy_max_hp: int = 80
-var player_turn: bool = true
+var player_turn: bool = false
 var combat_over: bool = false
 var defending: bool = false
 
@@ -20,6 +23,7 @@ var enemy_id: String = ""
 
 var active_party_members: Array = []
 var party_member_hp: Dictionary = {}
+var party_member_indices: Dictionary = {}  # Track indices in GameData.party_members
 
 # UI Elements
 var player_panel: ColorRect
@@ -40,9 +44,19 @@ var enemy_damage_min: int = 6
 var enemy_damage_max: int = 15
 
 func _ready() -> void:
+	# Initialize player stats from GameData
 	player_max_hp = GameData.get_max_hp()
 	player_hp = player_max_hp
+	
+	# Get party members and track their indices
+	active_party_members = GameData.get_party_members()
+	for i in range(active_party_members.size()):
+		var member = active_party_members[i]
+		var member_name = member.get("name", "Unknown")
+		party_member_hp[member_name] = member.get("hp", member.get("max_hp", 80))
+		party_member_indices[member_name] = i
 
+	# Generate enemy call asynchronously
 	enemy_call = await GameData.generate_call(enemy_type, float(enemy_hp) / enemy_max_hp)
 
 	# Generate a real name with 50% chance
@@ -50,14 +64,19 @@ func _ready() -> void:
 	enemy_real_name = possible_real_names[randi_range(0, possible_real_names.size() - 1)] if randf() < 0.5 else ""
 
 	enemy_id = "enemy_%d_%d" % [Time.get_unix_time_from_system(), randi_range(0, 999)]
-	active_party_members = GameData.get_party_members()
-
-	for member in active_party_members:
-		var member_name = member.get("name", "Unknown")
-		party_member_hp[member_name] = member.get("hp", member.get("max_hp", 80))
-
+	
+	# Scale XP reward based on enemy type and player level
+	xp_reward = 40 + (GameData.player_level * 10)
+	
 	_build_clean_ui()
 	_update_subdue_button()
+	
+	# Emit combat started signal
+	GameData.emit_signal("combat_started", {
+		"enemy_name": enemy_name,
+		"enemy_call": enemy_call,
+		"enemy_type": enemy_type
+	})
 
 func _build_clean_ui() -> void:
 	var bg := ColorRect.new()
@@ -299,10 +318,24 @@ func _make_btn(text: String, col: Color, callback: Callable) -> void:
 
 func _update_subdue_button() -> void:
 	var hp_pct = float(enemy_hp) / enemy_max_hp
-	if hp_pct <= 0.35 and hp_pct > 0.0:
+	
+	# Check if in subdue range
+	if GameData.can_subdue(hp_pct):
 		subdue_btn.visible = true
-		var chance = min(0.85, 0.25 + float(GameData.player_level) * 0.03)
+		# Calculate and display actual chance
+		var base_chance = GameData.SUBDUE_BASE_CHANCE
+		var luck_bonus = max(0, GameData.stats["luck"] - GameData.BASE_STAT_VALUE) * GameData.SUBDUE_LUCK_BONUS
+		var level_bonus = float(GameData.player_level) * 0.02
+		var chance = min(0.85, base_chance + luck_bonus + level_bonus)
 		subdue_btn.text = "Subdue (%.0f%%)" % (chance * 100)
+		
+		# Color code based on success chance
+		if chance >= 0.6:
+			subdue_btn.modulate = Color(0.4, 1.0, 0.4)  # Green - good chance
+		elif chance >= 0.4:
+			subdue_btn.modulate = Color(1.0, 1.0, 0.4)  # Yellow - moderate
+		else:
+			subdue_btn.modulate = Color(1.0, 0.4, 0.4)  # Red - low chance
 	else:
 		subdue_btn.visible = false
 
@@ -340,9 +373,12 @@ func _on_attack() -> void:
 		return
 	action_container.visible = false
 
-	# FIX: Use actual damage calculation instead of hardcoded 10
+	# Calculate damage with stats and familiar environment bonus
 	var base_dmg = GameData.get_base_damage()
+	var familiar_bonus = 1.0 + GameData.get_familiar_environment_damage_bonus()
 	var dmg = randi_range(base_dmg - 2, base_dmg + 8)
+	dmg = int(dmg * familiar_bonus)
+	
 	var is_crit = randf() < GameData.get_crit_chance()
 	if is_crit:
 		dmg *= 2
@@ -392,26 +428,40 @@ func _on_subdue() -> void:
 	action_container.visible = false
 	_log("Attempting to subdue...")
 
-	var chance = min(0.85, 0.25 + float(GameData.player_level) * 0.03)
+	# Calculate subdue chance with luck bonus
+	var base_chance = GameData.SUBDUE_BASE_CHANCE
+	var luck_bonus = max(0, GameData.stats["luck"] - GameData.BASE_STAT_VALUE) * GameData.SUBDUE_LUCK_BONUS
+	var level_bonus = float(GameData.player_level) * 0.02
+	var chance = min(0.85, base_chance + luck_bonus + level_bonus)
+	
+	# Check if enemy is in subdue HP range
+	var hp_percent = float(enemy_hp) / enemy_max_hp
+	if not GameData.can_subdue(hp_percent):
+		_log("Enemy too strong! Weaken them first!")
+		await get_tree().create_timer(0.8).timeout
+		player_turn = false
+		_enemy_action()
+		return
+	
 	if randf() < chance:
 		_log("Subdued %s!" % enemy_name)
 
 		if enemy_real_name != "" and enemy_real_name != enemy_name:
 			await get_tree().create_timer(0.8).timeout
-			_log("Real name: %s" % enemy_real_name)
+			_log("Real name revealed: %s" % enemy_real_name)
 			# Update enemy name label in panel
 			var name_lbl = _find_enemy_name_label()
 			if name_lbl:
 				name_lbl.text = "◆ " + enemy_real_name
 
 		var recruit_name = enemy_real_name if enemy_real_name != "" else enemy_name
-		GameData.add_party_member(recruit_name, enemy_call, enemy_type, 80)
+		GameData.add_party_member(recruit_name, enemy_call, enemy_type, enemy_max_hp)
 		_log("%s joins your party!" % recruit_name)
 
 		await get_tree().create_timer(1.2).timeout
 		_end_combat(true, true)
 	else:
-		_log("Subdue failed!")
+		_log("Subdue failed! (%.0f%% chance)" % (chance * 100))
 		await get_tree().create_timer(0.8).timeout
 		player_turn = false
 		_enemy_action()
@@ -504,24 +554,43 @@ func _end_combat(won: bool, subdued: bool = false) -> void:
 	if won:
 		if subdued:
 			_log("Enemy joins your party!")
+			# Bonus XP for successful subdue
+			var subdue_bonus = int(xp_reward * 0.5)
+			GameData.add_xp(subdue_bonus)
+			_log("Subdue bonus: +%d XP" % subdue_bonus)
 		else:
 			_log("Victory! +%d XP" % xp_reward)
 			GameData.add_xp(xp_reward)
+			
+		# Increment battle participation for all party members
+		for i in range(active_party_members.size()):
+			GameData.increment_battle_participation(i)
 	else:
 		_log("You were defeated...")
+		# Penalty: lose some XP on defeat (but not levels)
+		var xp_loss = int(GameData.player_xp * 0.1)
+		GameData.player_xp = max(0, GameData.player_xp - xp_loss)
+		_log("Defeat penalty: -%d XP" % xp_loss)
+
+	# Emit combat finished signal
+	GameData.emit_signal("combat_finished", won)
+	emit_signal("combat_finished", won)
 
 	await get_tree().create_timer(2.0).timeout
 	_return_to_world(won)
 
 func _return_to_world(_won: bool) -> void:
-	# FIX: Sync party HP back to GameData properly
+	# Sync party HP back to GameData properly
 	for i in range(active_party_members.size()):
 		if i < GameData.party_members.size():
-			# FIX: renamed from 'name' to 'mem_name'
 			var mem_name = active_party_members[i].get("name", "Unknown")
 			if party_member_hp.has(mem_name):
-				GameData.party_members[i]["hp"] = party_member_hp[mem_name]
+				GameData.update_party_member_hp(i, party_member_hp[mem_name])
+	
+	# Save game state
 	GameData.save_game()
+	
+	# Change to world scene
 	get_tree().change_scene_to_file("res://world.tscn")
 
 func _update_all_bars() -> void:
