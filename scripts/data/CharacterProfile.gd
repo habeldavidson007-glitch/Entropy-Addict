@@ -1,47 +1,43 @@
-# File: res://scripts/data/CharacterProfile.gd
-# This is a Resource script - DO NOT attach to any node
 extends Resource
 class_name CharacterProfile
 
-# --- IDENTITY (Master Bible Part III & VIII) ---
+# Identity
 @export var character_name: String = "Jarger Schamer"
 @export var call_title: String = "Silent Call"
-@export var fate_title: String = ""
+@export var fate_title: String = "Sovereign Tide"
 @export var field_role: String = "Striker"
 
-# --- LEVEL & TALENTS (Master Bible Part IV) ---
+# Level & XP
 @export var level: int = 1
 @export var xp: int = 0
 @export var xp_to_next_level: int = 100
-@export var talent_slots: Array[String] = ["", ""]
 
-# --- MASTERY SYSTEM (Master Bible Part IV) ---
+# Masteries (Master Bible Part IV)
 @export var mastery_1_name: String = "Mind"
 @export var mastery_1_level: int = 0
 @export var mastery_2_name: String = "Weapon"
 @export var mastery_2_level: int = 0
 
-# --- ROOT SYSTEM (Habit → Routine → Custom → Skill) ---
+# Root System (Habit → Routine → Custom → Skill)
 @export var root_progress: int = 0
 @export var root_stage: String = "Habit"
 
-# --- CODEX SYSTEM (6 Slots: 3 Active, 3 Passive) ---
+# Codex (6 slots: 3 Active, 3 Passive)
 @export var skill_slots_active: Array[String] = ["", "", ""]
 @export var skill_slots_passive: Array[String] = ["", "", ""]
 
-# --- HABIT LOG ---
+# Habit Log
 @export var current_habit_log: Array[String] = []
 
-# --- STATS ---
+# Stats
 @export var health: int = 100
 @export var health_max: int = 100
 @export var stamina: int = 100
 @export var stamina_max: int = 100
 
-# --- FUNCTIONS ---
 func add_xp(amount: int) -> void:
 	xp += amount
-	if xp >= xp_to_next_level:
+	while xp >= xp_to_next_level:
 		level_up()
 
 func level_up() -> void:
@@ -60,7 +56,6 @@ func advance_root_stage() -> void:
 		"Habit": root_stage = "Routine"
 		"Routine": root_stage = "Custom"
 		"Custom": root_stage = "Skill"
-		"Skill": pass
 
 func get_xp_percentage() -> float:
 	if xp_to_next_level == 0:

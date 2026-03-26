@@ -1,7 +1,7 @@
 extends Control
 
 # ─────────────────────────────────────────
-# COMBAT SYSTEM — With Call + Subdue + Name Reveal
+# COMBAT SYSTEM — Clean UI Version
 # ─────────────────────────────────────────
 
 var player_hp: int = 100
@@ -11,29 +11,30 @@ var enemy_max_hp: int = 80
 var player_turn: bool = true
 var combat_over: bool = false
 var defending: bool = false
+
 var enemy_call: String = ""
 var enemy_name: String = "Lone Wanderer"
 var enemy_real_name: String = ""
-var enemy_type: String = "Unknown"
+var enemy_type: String = "Unknown affiliation — unknown intent"
+var enemy_id: String = ""
 
-# UI References
+var active_party_members: Array = []
+var party_member_hp: Dictionary = {}
+
+# UI Elements
+var player_panel: ColorRect
+var enemy_panel: ColorRect
 var player_hp_bar: ProgressBar
 var enemy_hp_bar: ProgressBar
 var player_hp_label: Label
 var enemy_hp_label: Label
-var enemy_call_label: Label
 var log_label: Label
 var action_container: HBoxContainer
-var initiative_label: Label
 var roll_btn: Button
-var player_bg: ColorRect
-var enemy_bg: ColorRect
-var xp_bar: ColorRect
-var xp_label: Label
-var level_label: Label
 var subdue_btn: Button
+var party_hp_labels: Array = []
+var party_hp_bars: Array = []
 
-# Combat values
 var xp_reward: int = 50
 var enemy_damage_min: int = 6
 var enemy_damage_max: int = 15
@@ -42,598 +43,487 @@ func _ready() -> void:
 	player_max_hp = GameData.get_max_hp()
 	player_hp = player_max_hp
 	
-	# Generate enemy Call via Groq
 	enemy_call = await GameData.generate_call(enemy_type, float(enemy_hp) / enemy_max_hp)
 	
-	_build_ui()
-	_update_xp_display()
+	var possible_real_names = ["Maret", "Ossel", "Kaelen", "Vera", "Lyra", "Dain"]
+	if randf() < 0.5:
+		enemy_real_name = possible_real_names[randi_range(0, possible_real_names.size() - 1)]
+	else:
+		enemy_real_name = ""
+	
+	enemy_id = "enemy_%d_%d" % [Time.get_unix_time_from_system(), randi_range(0, 999)]
+	active_party_members = GameData.get_party_members()
+	
+	for member in active_party_members:
+		var member_name = member.get("name", "Unknown")
+		party_member_hp[member_name] = member.get("hp", member.get("max_hp", 80))
+	
+	_build_clean_ui()
+	_update_subdue_button()
 
-func _build_ui() -> void:
+func _build_clean_ui() -> void:
+	# Background
 	var bg := ColorRect.new()
 	bg.color = Color(0.05, 0.03, 0.08)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	
-	var atmos := Label.new()
-	atmos.text = "— ENCOUNTER —"
-	atmos.add_theme_font_size_override("font_size", 14)
-	atmos.modulate = Color(0.4, 0.3, 0.4)
-	atmos.position = Vector2(494, 30)
-	add_child(atmos)
+	# Title
+	var title := Label.new()
+	title.text = "— ENCOUNTER —"
+	title.add_theme_font_size_override("font_size", 16)
+	title.modulate = Color(0.6, 0.5, 0.6)
+	title.position = Vector2(500, 20)
+	add_child(title)
 	
-	# ─── PLAYER SECTION ───
-	player_bg = ColorRect.new()
-	player_bg.color = Color(0.08, 0.08, 0.12)
-	player_bg.size = Vector2(300, 220)
-	player_bg.position = Vector2(60, 80)
-	add_child(player_bg)
+	# ── LEFT SIDE: Party + Player ──
+	var left_x = 30
+	var left_y = 70
 	
-	var player_name_lbl := Label.new()
-	player_name_lbl.text = GameData.player_emoticon + "   " + GameData.player_name
-	player_name_lbl.add_theme_font_size_override("font_size", 22)
-	player_name_lbl.modulate = GameData.player_color
-	player_name_lbl.position = Vector2(76, 96)
-	add_child(player_name_lbl)
+	# Party Panel
+	if active_party_members.size() > 0:
+		var party_panel := ColorRect.new()
+		party_panel.color = Color(0.1, 0.08, 0.12)
+		party_panel.size = Vector2(300, 50 + (active_party_members.size() * 40))
+		party_panel.position = Vector2(left_x, left_y)
+		add_child(party_panel)
+		
+		var party_title := Label.new()
+		party_title.text = "★ PARTY (%d)" % active_party_members.size()
+		party_title.add_theme_font_size_override("font_size", 13)
+		party_title.modulate = Color(0.9, 0.7, 0.3)
+		party_title.position = Vector2(10, 10)
+		party_panel.add_child(party_title)
+		
+		var offset_y = 35
+		for member in active_party_members:
+			var member_name = member.get("name", "Unknown")
+			var member_max = member.get("max_hp", 80)
+			var current = party_member_hp.get(member_name, member_max)
+			
+			var name_lbl := Label.new()
+			name_lbl.text = "• " + member_name
+			name_lbl.add_theme_font_size_override("font_size", 11)
+			name_lbl.modulate = Color(0.9, 0.7, 0.5)
+			name_lbl.position = Vector2(10, offset_y)
+			party_panel.add_child(name_lbl)
+			
+			var hp_lbl := Label.new()
+			hp_lbl.text = "HP: %d/%d" % [current, member_max]
+			hp_lbl.add_theme_font_size_override("font_size", 10)
+			hp_lbl.modulate = Color(0.7, 0.9, 0.7)
+			hp_lbl.position = Vector2(10, offset_y + 18)
+			party_panel.add_child(hp_lbl)
+			party_hp_labels.append(hp_lbl)
+			
+			var hp_bar := ProgressBar.new()
+			hp_bar.max_value = member_max
+			hp_bar.value = current
+			hp_bar.size = Vector2(150, 12)
+			hp_bar.position = Vector2(140, offset_y + 20)
+			party_panel.add_child(hp_bar)
+			party_hp_bars.append(hp_bar)
+			
+			offset_y += 40
 	
-	var player_habit_lbl := Label.new()
-	player_habit_lbl.text = "First habit: %s" % GameData.first_habit.left(40)
-	player_habit_lbl.add_theme_font_size_override("font_size", 11)
-	player_habit_lbl.modulate = Color(0.45, 0.45, 0.45)
-	player_habit_lbl.position = Vector2(76, 128)
-	add_child(player_habit_lbl)
+	# Player Panel
+	player_panel = ColorRect.new()
+	player_panel.color = Color(0.12, 0.1, 0.15)
+	player_panel.size = Vector2(300, 180)
+	player_panel.position = Vector2(left_x, left_y + (60 if active_party_members.size() > 0 else 0))
+	add_child(player_panel)
 	
-	level_label = Label.new()
-	level_label.text = "Level %d" % GameData.player_level
-	level_label.add_theme_font_size_override("font_size", 16)
-	level_label.modulate = Color(0.9, 0.7, 0.3)
-	level_label.position = Vector2(76, 148)
-	add_child(level_label)
+	var player_name := Label.new()
+	player_name.text = GameData.player_emoticon + " " + GameData.player_name
+	player_name.add_theme_font_size_override("font_size", 20)
+	player_name.modulate = GameData.player_color
+	player_name.position = Vector2(15, 15)
+	player_panel.add_child(player_name)
+	
+	var level_lbl := Label.new()
+	level_lbl.text = "Level %d" % GameData.player_level
+	level_lbl.add_theme_font_size_override("font_size", 14)
+	level_lbl.modulate = Color(0.9, 0.7, 0.3)
+	level_lbl.position = Vector2(15, 42)
+	player_panel.add_child(level_lbl)
 	
 	player_hp_bar = ProgressBar.new()
 	player_hp_bar.max_value = player_max_hp
 	player_hp_bar.value = player_hp
-	player_hp_bar.size = Vector2(268, 20)
-	player_hp_bar.position = Vector2(76, 172)
-	add_child(player_hp_bar)
+	player_hp_bar.size = Vector2(270, 22)
+	player_hp_bar.position = Vector2(15, 65)
+	player_panel.add_child(player_hp_bar)
 	
 	player_hp_label = Label.new()
-	player_hp_label.text = "HP  %d / %d" % [player_hp, player_max_hp]
-	player_hp_label.add_theme_font_size_override("font_size", 13)
+	player_hp_label.text = "HP: %d / %d" % [player_hp, player_max_hp]
+	player_hp_label.add_theme_font_size_override("font_size", 12)
 	player_hp_label.modulate = Color(0.7, 0.9, 0.7)
-	player_hp_label.position = Vector2(76, 199)
-	add_child(player_hp_label)
+	player_hp_label.position = Vector2(15, 92)
+	player_panel.add_child(player_hp_label)
 	
 	var xp_bar_bg := ColorRect.new()
-	xp_bar_bg.color = Color(0.15, 0.15, 0.2)
-	xp_bar_bg.size = Vector2(268, 8)
-	xp_bar_bg.position = Vector2(76, 222)
-	add_child(xp_bar_bg)
+	xp_bar_bg.color = Color(0.2, 0.2, 0.25)
+	xp_bar_bg.size = Vector2(270, 8)
+	xp_bar_bg.position = Vector2(15, 115)
+	player_panel.add_child(xp_bar_bg)
 	
-	xp_bar = ColorRect.new()
+	var xp_bar := ColorRect.new()
 	xp_bar.color = Color(0.3, 0.6, 0.9)
-	xp_bar.size = Vector2(268, 8)
-	xp_bar.position = Vector2(76, 222)
-	add_child(xp_bar)
+	xp_bar.size = Vector2(270 * (float(GameData.player_xp) / GameData.xp_to_next_level), 8)
+	xp_bar.position = Vector2(15, 115)
+	player_panel.add_child(xp_bar)
 	
-	xp_label = Label.new()
-	xp_label.text = "%d / %d XP" % [GameData.player_xp, GameData.xp_to_next_level]
-	xp_label.add_theme_font_size_override("font_size", 10)
-	xp_label.modulate = Color(0.5, 0.6, 0.7)
-	xp_label.position = Vector2(76, 235)
-	add_child(xp_label)
+	var xp_lbl := Label.new()
+	xp_lbl.text = "%d / %d XP" % [GameData.player_xp, GameData.xp_to_next_level]
+	xp_lbl.add_theme_font_size_override("font_size", 10)
+	xp_lbl.modulate = Color(0.6, 0.7, 0.8)
+	xp_lbl.position = Vector2(15, 130)
+	player_panel.add_child(xp_lbl)
 	
-	# ─── ENEMY SECTION ───
-	enemy_bg = ColorRect.new()
-	enemy_bg.color = Color(0.12, 0.06, 0.06)
-	enemy_bg.size = Vector2(300, 180)
-	enemy_bg.position = Vector2(820, 80)
-	add_child(enemy_bg)
+	# ── RIGHT SIDE: Enemy Panel ──
+	enemy_panel = ColorRect.new()
+	enemy_panel.color = Color(0.15, 0.08, 0.08)
+	enemy_panel.size = Vector2(320, 200)
+	enemy_panel.position = Vector2(800, 70)
+	add_child(enemy_panel)
 	
 	var enemy_name_lbl := Label.new()
-	enemy_name_lbl.text = "◆  " + enemy_name
-	enemy_name_lbl.add_theme_font_size_override("font_size", 22)
-	enemy_name_lbl.modulate = Color(0.9, 0.25, 0.25)
-	enemy_name_lbl.position = Vector2(836, 96)
-	add_child(enemy_name_lbl)
+	enemy_name_lbl.text = "◆ " + enemy_name
+	enemy_name_lbl.add_theme_font_size_override("font_size", 20)
+	enemy_name_lbl.modulate = Color(0.9, 0.4, 0.4)
+	enemy_name_lbl.position = Vector2(15, 15)
+	enemy_panel.add_child(enemy_name_lbl)
 	
-	enemy_call_label = Label.new()
-	enemy_call_label.text = "'%s'" % enemy_call
-	enemy_call_label.add_theme_font_size_override("font_size", 14)
-	enemy_call_label.modulate = Color(0.7, 0.7, 0.9)
-	enemy_call_label.position = Vector2(836, 122)
-	add_child(enemy_call_label)
+	var call_lbl := Label.new()
+	call_lbl.text = "'%s'" % enemy_call
+	call_lbl.add_theme_font_size_override("font_size", 12)
+	call_lbl.modulate = Color(0.7, 0.7, 0.9)
+	call_lbl.position = Vector2(15, 42)
+	enemy_panel.add_child(call_lbl)
 	
-	var enemy_type_lbl := Label.new()
-	enemy_type_lbl.text = enemy_type
-	enemy_type_lbl.add_theme_font_size_override("font_size", 11)
-	enemy_type_lbl.modulate = Color(0.45, 0.45, 0.45)
-	enemy_type_lbl.position = Vector2(836, 145)
-	add_child(enemy_type_lbl)
+	var type_lbl := Label.new()
+	type_lbl.text = enemy_type
+	type_lbl.add_theme_font_size_override("font_size", 10)
+	type_lbl.modulate = Color(0.5, 0.5, 0.5)
+	type_lbl.position = Vector2(15, 62)
+	enemy_panel.add_child(type_lbl)
 	
 	enemy_hp_bar = ProgressBar.new()
 	enemy_hp_bar.max_value = enemy_max_hp
 	enemy_hp_bar.value = enemy_hp
-	enemy_hp_bar.size = Vector2(268, 20)
-	enemy_hp_bar.position = Vector2(836, 172)
-	add_child(enemy_hp_bar)
+	enemy_hp_bar.size = Vector2(290, 22)
+	enemy_hp_bar.position = Vector2(15, 90)
+	enemy_panel.add_child(enemy_hp_bar)
 	
 	enemy_hp_label = Label.new()
-	enemy_hp_label.text = "HP  %d / %d" % [enemy_hp, enemy_max_hp]
-	enemy_hp_label.add_theme_font_size_override("font_size", 13)
-	enemy_hp_label.modulate = Color(0.9, 0.5, 0.5)
-	enemy_hp_label.position = Vector2(836, 199)
-	add_child(enemy_hp_label)
+	enemy_hp_label.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
+	enemy_hp_label.add_theme_font_size_override("font_size", 12)
+	enemy_hp_label.modulate = Color(0.9, 0.6, 0.6)
+	enemy_hp_label.position = Vector2(15, 118)
+	enemy_panel.add_child(enemy_hp_label)
 	
+	# VS Text
 	var vs := Label.new()
 	vs.text = "VS"
-	vs.add_theme_font_size_override("font_size", 52)
-	vs.modulate = Color(0.35, 0.35, 0.4)
-	vs.position = Vector2(544, 130)
+	vs.add_theme_font_size_override("font_size", 48)
+	vs.modulate = Color(0.5, 0.5, 0.6)
+	vs.position = Vector2(540, 180)
 	add_child(vs)
 	
-	initiative_label = Label.new()
-	initiative_label.text = "Both sides roll. Highest number moves first.\nTies go to you."
-	initiative_label.add_theme_font_size_override("font_size", 16)
-	initiative_label.modulate = Color(0.75, 0.72, 0.65)
-	initiative_label.position = Vector2(300, 300)
-	initiative_label.custom_minimum_size = Vector2(580, 0)
-	initiative_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(initiative_label)
+	# Initiative/Status Label
+	var status_lbl := Label.new()
+	status_lbl.name = "StatusLabel"
+	status_lbl.text = "Both sides roll. Highest moves first."
+	status_lbl.add_theme_font_size_override("font_size", 14)
+	status_lbl.modulate = Color(0.7, 0.7, 0.7)
+	status_lbl.position = Vector2(350, 300)
+	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	add_child(status_lbl)
 	
+	# Roll Button
 	roll_btn = Button.new()
 	roll_btn.text = "Roll Initiative"
-	roll_btn.custom_minimum_size = Vector2(240, 52)
-	roll_btn.add_theme_font_size_override("font_size", 18)
-	roll_btn.position = Vector2(456, 368)
+	roll_btn.custom_minimum_size = Vector2(220, 50)
+	roll_btn.add_theme_font_size_override("font_size", 16)
+	roll_btn.position = Vector2(465, 340)
 	roll_btn.pressed.connect(_roll_initiative)
-	_style_button(roll_btn, Color(0.4, 0.6, 0.9))
+	_style_btn(roll_btn, Color(0.4, 0.6, 0.9))
 	add_child(roll_btn)
 	
+	# Combat Log
 	log_label = Label.new()
 	log_label.text = " "
-	log_label.add_theme_font_size_override("font_size", 16)
-	log_label.modulate = Color(0.78, 0.78, 0.78)
-	log_label.position = Vector2(160, 450)
-	log_label.custom_minimum_size = Vector2(860, 80)
+	log_label.add_theme_font_size_override("font_size", 14)
+	log_label.modulate = Color(0.8, 0.8, 0.8)
+	log_label.position = Vector2(100, 420)
+	log_label.custom_minimum_size = Vector2(950, 60)
 	log_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	add_child(log_label)
 	
+	# Action Buttons
 	action_container = HBoxContainer.new()
-	action_container.position = Vector2(256, 558)
-	action_container.add_theme_constant_override("separation", 16)
+	action_container.position = Vector2(150, 520)
+	action_container.add_theme_constant_override("separation", 15)
 	action_container.visible = false
 	add_child(action_container)
 	
-	_make_action("Attack", Color(0.9, 0.3, 0.3), _on_attack)
-	_make_action("Defend", Color(0.3, 0.6, 0.9), _on_defend)
-	_make_action("Flee", Color(0.6, 0.6, 0.3), _on_flee)
+	_make_btn("Attack", Color(0.9, 0.3, 0.3), _on_attack)
+	_make_btn("Defend", Color(0.3, 0.6, 0.9), _on_defend)
+	_make_btn("Flee", Color(0.7, 0.7, 0.3), _on_flee)
 	
-	# ─── SUBDUE BUTTON ───
 	subdue_btn = Button.new()
-	subdue_btn.text = "🤝 Subdue"
-	subdue_btn.custom_minimum_size = Vector2(200, 52)
-	subdue_btn.add_theme_font_size_override("font_size", 18)
+	subdue_btn.text = "Subdue"
+	subdue_btn.custom_minimum_size = Vector2(160, 50)
+	subdue_btn.add_theme_font_size_override("font_size", 16)
 	subdue_btn.pressed.connect(_on_subdue)
-	_style_button(subdue_btn, Color(0.6, 0.4, 0.8))
+	_style_btn(subdue_btn, Color(0.7, 0.4, 0.9))
 	subdue_btn.visible = false
 	action_container.add_child(subdue_btn)
 
-func _style_button(btn: Button, col: Color) -> void:
+func _style_btn(btn: Button, col: Color) -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = col.darkened(0.3)
 	style.corner_radius_top_left = 8
 	style.corner_radius_top_right = 8
 	style.corner_radius_bottom_left = 8
 	style.corner_radius_bottom_right = 8
-	style.shadow_size = 4
-	style.shadow_color = Color(0, 0, 0, 0.5)
 	btn.add_theme_stylebox_override("normal", style)
 	
-	var hover_style := style.duplicate()
-	hover_style.bg_color = col
-	hover_style.shadow_size = 6
-	btn.add_theme_stylebox_override("hover", hover_style)
-	
-	var pressed_style := style.duplicate()
-	pressed_style.bg_color = col.darkened(0.5)
-	pressed_style.shadow_size = 2
-	btn.add_theme_stylebox_override("pressed", pressed_style)
-	
-	var disabled_style := style.duplicate()
-	disabled_style.bg_color = Color(0.3, 0.3, 0.3)
-	disabled_style.shadow_size = 0
-	btn.add_theme_stylebox_override("disabled", disabled_style)
+	var hover := style.duplicate()
+	hover.bg_color = col
+	btn.add_theme_stylebox_override("hover", hover)
 
-func _make_action(label: String, col: Color, callback: Callable) -> void:
+func _make_btn(text: String, col: Color, callback: Callable) -> void:
 	var btn := Button.new()
-	btn.text = label
-	btn.custom_minimum_size = Vector2(200, 52)
-	btn.add_theme_font_size_override("font_size", 18)
-	_style_button(btn, col)
+	btn.text = text
+	btn.custom_minimum_size = Vector2(160, 50)
+	btn.add_theme_font_size_override("font_size", 16)
+	_style_btn(btn, col)
 	btn.pressed.connect(callback)
 	action_container.add_child(btn)
 
-func _update_xp_display() -> void:
-	if xp_bar and xp_label and level_label:
-		var progress = GameData.get_xp_progress()
-		xp_bar.size.x = 268 * progress
-		xp_label.text = "%d / %d XP" % [GameData.player_xp, GameData.xp_to_next_level]
-		level_label.text = "Level %d" % GameData.player_level
-
 func _update_subdue_button() -> void:
-	var hp_percent = float(enemy_hp) / enemy_max_hp
-	if GameData.can_subdue(hp_percent):
+	var hp_pct = float(enemy_hp) / enemy_max_hp
+	if hp_pct <= 0.35:
 		subdue_btn.visible = true
-		subdue_btn.text = "🤝 Subdue (%.0f%%)" % (GameData.get_subdue_chance() * 100)
+		var chance = 0.25 + float(GameData.player_level) * 0.03
+		subdue_btn.text = "Subdue (%.0f%%)" % (min(0.85, chance) * 100)
 	else:
 		subdue_btn.visible = false
 
 func _roll_initiative() -> void:
 	roll_btn.visible = false
 	
-	var tween = create_tween()
-	tween.tween_property(roll_btn, "scale", Vector2(1.1, 1.1), 0.1)
-	tween.tween_property(roll_btn, "scale", Vector2(1, 1), 0.1)
+	var p_roll = randi_range(1, 10) + int(GameData.get_initiative_bonus() * 10)
+	var e_roll = randi_range(1, 10)
+	p_roll += active_party_members.size()
 	
-	var player_roll := randi_range(1, 10)
-	var enemy_roll := randi_range(1, 10)
+	var status = get_node_or_null("StatusLabel")
+	if status:
+		status.text = "Rolling..."
 	
-	var dex_bonus = GameData.get_initiative_bonus() * 10
-	player_roll += int(dex_bonus)
-	
-	initiative_label.text = "Rolling..."
 	await get_tree().create_timer(0.5).timeout
 	
-	if player_roll >= enemy_roll:
+	if p_roll >= e_roll:
 		player_turn = true
-		initiative_label.text = "%s rolls %d. Enemy rolls %d. YOU move first." % [GameData.player_name, player_roll, enemy_roll]
-		initiative_label.modulate = Color(0.4, 0.9, 0.4)
+		if status:
+			status.text = "You roll %d. Enemy rolls %d. YOU go first!" % [p_roll, e_roll]
+			status.modulate = Color(0.4, 0.9, 0.4)
 		await get_tree().create_timer(1.0).timeout
-		_log("Your move. Choose an action.")
+		_log("Your turn!")
 		action_container.visible = true
 	else:
 		player_turn = false
-		initiative_label.text = "%s rolls %d. Enemy rolls %d. ENEMY moves first." % [GameData.player_name, player_roll, enemy_roll]
-		initiative_label.modulate = Color(0.9, 0.4, 0.4)
-		await get_tree().create_timer(1.2).timeout
+		if status:
+			status.text = "You roll %d. Enemy rolls %d. ENEMY goes first!" % [p_roll, e_roll]
+			status.modulate = Color(0.9, 0.4, 0.4)
+		await get_tree().create_timer(1.0).timeout
 		_enemy_action()
 
 func _on_attack() -> void:
-	if not player_turn or combat_over:
-		return
-	defending = false
+	if not player_turn or combat_over: return
 	action_container.visible = false
 	
-	var tween = create_tween()
-	tween.tween_property(player_bg, "position:x", player_bg.position.x + 50, 0.15)
-	tween.tween_property(player_bg, "position:x", player_bg.position.x, 0.15)
-	
-	await get_tree().create_timer(0.2).timeout
-	
-	var base_dmg = GameData.get_base_damage()
-	var dmg = randi_range(base_dmg - 2, base_dmg + 8)
-	
-	var crit_roll = randf()
-	var is_crit = crit_roll < GameData.get_crit_chance()
-	
-	if is_crit:
-		dmg *= 2
-		_log("CRITICAL HIT! ", Color(1, 0.3, 0.3))
-		await get_tree().create_timer(0.3).timeout
-	
-	enemy_hp -= dmg
+	enemy_hp -= randi_range(8, 15)
 	enemy_hp = max(enemy_hp, 0)
+	_update_all_bars()
+	_log("%s attacks for %d damage!" % [GameData.player_name, 10])
 	
-	_flash_damage(false)
-	_screen_shake(5.0)
-	_show_damage_number(dmg, false, is_crit)
-	
-	_update_bars()
-	_update_subdue_button()
-	_log("%s strikes for %d damage." % [GameData.player_name, dmg])
+	if active_party_members.size() > 0:
+		await get_tree().create_timer(0.4).timeout
+		await _party_attack()
 	
 	if enemy_hp <= 0:
 		_end_combat(true)
 		return
 	
 	player_turn = false
-	await get_tree().create_timer(1.0).timeout
+	await get_tree().create_timer(0.8).timeout
 	_enemy_action()
 
-func _on_subdue() -> void:
-	if not player_turn or combat_over:
-		return
-	
-	action_container.visible = false
-	_log("Attempting to subdue...", Color(0.9, 0.9, 0.3))
-	
-	var hp_percent = float(enemy_hp) / enemy_max_hp
-	var success = GameData.attempt_subdue(enemy_name, enemy_call, enemy_type)
-	
-	if success:
-		# Show name reveal if available
-		if enemy_real_name and enemy_real_name != enemy_name:
-			_log("✅ Subdued %s!" % enemy_name, Color(0.6, 0.9, 0.6))
-			await get_tree().create_timer(1.0).timeout
-			_log("📜 Real name uncovered: %s" % enemy_real_name, Color(1, 0.9, 0.3))
-			await _show_name_reveal_animation(enemy_name, enemy_real_name)
-		else:
-			_log("✅ %s subdued! They may join your cause later." % enemy_name, Color(0.6, 0.9, 0.6))
+func _party_attack() -> void:
+	for member in active_party_members:
+		var name = member.get("name", "Unknown")
+		var max_hp = member.get("max_hp", 80)
+		if party_member_hp.get(name, max_hp) <= 0: continue
 		
-		await get_tree().create_timer(1.5).timeout
+		var dmg = randi_range(4, 8) + GameData.player_level
+		enemy_hp -= dmg
+		enemy_hp = max(enemy_hp, 0)
+		_update_all_bars()
+		_log("%s attacks for %d damage!" % [name, dmg])
+		
+		if enemy_hp <= 0: break
+		await get_tree().create_timer(0.3).timeout
+
+func _on_subdue() -> void:
+	if not player_turn or combat_over: return
+	action_container.visible = false
+	_log("Attempting to subdue...")
+	
+	var chance = 0.25 + float(GameData.player_level) * 0.03
+	if randf() < chance:
+		_log("Subdued %s!" % enemy_name)
+		
+		if enemy_real_name != "" and enemy_real_name != enemy_name:
+			await get_tree().create_timer(0.8).timeout
+			_log("Real name: %s" % enemy_real_name)
+			# Update enemy name label
+			var name_lbl = _find_enemy_name()
+			if name_lbl:
+				name_lbl.text = "◆ " + enemy_real_name
+		
+		var add_name = enemy_real_name if enemy_real_name != "" else enemy_name
+		GameData.add_party_member(add_name, enemy_call, enemy_type, 80)
+		_log("%s joins your party!" % add_name)
+		
+		await get_tree().create_timer(1.2).timeout
 		_end_combat(true, true)
 	else:
-		_log("❌ Subdue failed — enemy breaks free!", Color(0.9, 0.3, 0.3))
-		await get_tree().create_timer(1.0).timeout
+		_log("Subdue failed!")
+		await get_tree().create_timer(0.8).timeout
 		player_turn = false
 		_enemy_action()
 
-func _show_name_reveal_animation(generic_name: String, real_name: String) -> void:
-	"""Animated name reveal"""
-	var reveal_label := Label.new()
-	reveal_label.text = "Subdued: %s" % generic_name
-	reveal_label.add_theme_font_size_override("font_size", 24)
-	reveal_label.modulate = Color(0.6, 0.8, 0.6)
-	reveal_label.position = Vector2(400, 300)
-	reveal_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(reveal_label)
-	
-	# Fade out generic name
-	var tween = create_tween()
-	tween.tween_property(reveal_label, "modulate:a", 0, 0.5)
-	await tween.finished
-	
-	# Show real name
-	reveal_label.text = "Real Name: %s" % real_name
-	reveal_label.modulate = Color(1, 0.9, 0.3)
-	reveal_label.position.y = 320
-	
-	tween = create_tween()
-	tween.tween_property(reveal_label, "modulate:a", 1, 0.3)
-	await get_tree().create_timer(1.5).timeout
-	tween.tween_property(reveal_label, "modulate:a", 0, 0.5)
-	await tween.finished
-	
-	reveal_label.queue_free()
+func _find_enemy_name() -> Label:
+	for child in enemy_panel.get_children():
+		if child is Label and child.text.begins_with("◆"):
+			return child
+	return null
 
 func _on_defend() -> void:
-	if not player_turn or combat_over:
-		return
+	if not player_turn or combat_over: return
 	defending = true
 	action_container.visible = false
-	
-	var tween = create_tween()
-	tween.tween_property(player_bg, "modulate", Color(0.5, 0.7, 1, 1), 0.2)
-	tween.tween_property(player_bg, "modulate", Color(1, 1, 1, 1), 0.2)
-	
-	_log("%s braces. Incoming damage reduced this turn." % GameData.player_name)
+	_log("%s defends. Damage reduced!" % GameData.player_name)
 	player_turn = false
-	await get_tree().create_timer(1.0).timeout
+	await get_tree().create_timer(0.8).timeout
 	_enemy_action()
 
 func _on_flee() -> void:
-	if combat_over:
-		return
+	if combat_over: return
 	action_container.visible = false
 	
-	var base_flee = 0.42
-	var flee_bonus = GameData.get_flee_bonus()
-	var flee_chance = base_flee + flee_bonus
-	
-	var roll := randf()
-	if roll < flee_chance:
-		_log("You slip into the dark. The encounter ends.")
-		await get_tree().create_timer(1.6).timeout
+	if randf() < 0.5:
+		_log("You escaped!")
+		await get_tree().create_timer(1.0).timeout
 		_return_to_world(true)
 	else:
-		_log("No opening. The enemy cuts off the path.")
+		_log("Can't escape!")
 		player_turn = false
-		await get_tree().create_timer(1.0).timeout
+		await get_tree().create_timer(0.8).timeout
 		_enemy_action()
 
 func _enemy_action() -> void:
-	if combat_over:
-		return
+	if combat_over: return
 	
-	var tween = create_tween()
-	tween.tween_property(enemy_bg, "position:x", enemy_bg.position.x - 50, 0.15)
-	tween.tween_property(enemy_bg, "position:x", enemy_bg.position.x, 0.15)
-	
-	await get_tree().create_timer(0.2).timeout
-	
-	var base_evasion = GameData.get_evasion_chance()
-	var familiar_bonus = GameData.familiar_environment_bonus / 200.0
-	var total_evasion = base_evasion + familiar_bonus
-	
-	var evasion_roll = randf()
-	if evasion_roll < total_evasion:
-		_log("You evade the attack! (Familiar terrain helps)", Color(0.3, 1, 0.3))
-		player_turn = true
-		initiative_label.text = "★ YOUR TURN ★"
-		initiative_label.modulate = Color(0.4, 0.9, 0.4)
-		await get_tree().create_timer(0.6).timeout
-		_log("Your move.")
-		action_container.visible = true
-		return
-	
-	var dmg := randi_range(enemy_damage_min, enemy_damage_max)
-	var defense = GameData.get_base_defense()
-	dmg = max(1, dmg - defense)
-	
+	var dmg = randi_range(enemy_damage_min, enemy_damage_max)
 	if defending:
 		dmg = int(dmg * 0.5)
-		_log("Your defense reduces damage to %d!" % dmg)
+		defending = false
 	
-	defending = false
-	player_hp -= dmg
-	player_hp = max(player_hp, 0)
-	
-	_flash_damage(true)
-	_screen_shake(8.0)
-	_show_damage_number(dmg, true, false)
-	
-	_update_bars()
-	_log("Enemy strikes for %d damage." % dmg)
+	if active_party_members.size() > 0 and randf() < 0.4:
+		var idx = randi_range(0, active_party_members.size() - 1)
+		var target = active_party_members[idx]
+		var t_name = target.get("name", "Unknown")
+		var t_hp = party_member_hp.get(t_name, 80)
+		t_hp -= dmg
+		t_hp = max(t_hp, 0)
+		party_member_hp[t_name] = t_hp
+		_log("Enemy hits %s for %d!" % [t_name, dmg])
+		_update_party_ui()
+	else:
+		player_hp -= dmg
+		player_hp = max(player_hp, 0)
+		_log("Enemy hits you for %d!" % dmg)
+		_update_all_bars()
 	
 	if player_hp <= 0:
-		_end_combat(false)
-		return
+		var all_dead = true
+		for m in active_party_members:
+			if party_member_hp.get(m.get("name", ""), 0) > 0:
+				all_dead = false
+				break
+		if all_dead:
+			_end_combat(false)
+			return
 	
 	player_turn = true
-	initiative_label.text = "★ YOUR TURN ★"
-	initiative_label.modulate = Color(0.4, 0.9, 0.4)
+	var status = get_node_or_null("StatusLabel")
+	if status:
+		status.text = "★ YOUR TURN ★"
+		status.modulate = Color(0.4, 0.9, 0.4)
 	await get_tree().create_timer(0.6).timeout
-	_log("Your move.")
+	_log("Your move!")
 	action_container.visible = true
 
-func _update_bars() -> void:
-	_animate_hp_bar(player_hp_bar, player_hp)
-	_animate_hp_bar(enemy_hp_bar, enemy_hp)
-	
-	# Change HP bar color based on health %
-	player_hp_bar.modulate = _get_hp_color(player_hp, player_max_hp)
-	enemy_hp_bar.modulate = _get_hp_color(enemy_hp, enemy_max_hp)
-	
-	player_hp_label.text = "HP  %d / %d" % [player_hp, player_max_hp]
-	enemy_hp_label.text = "HP  %d / %d" % [enemy_hp, enemy_max_hp]
-
-func _get_hp_color(current: int, max_hp: int) -> Color:
-	var percent = float(current) / max_hp
-	if percent > 0.6:
-		return Color(0.7, 0.9, 0.7)  # Green
-	elif percent > 0.3:
-		return Color(0.9, 0.9, 0.3)  # Yellow
-	else:
-		return Color(0.9, 0.3, 0.3)  # Red
-
-func _animate_hp_bar(bar: ProgressBar, target_value: float) -> void:
-	var tween = create_tween()
-	tween.tween_property(bar, "value", target_value, 0.5).set_ease(Tween.EASE_OUT).set_trans(Tween.TRANS_QUAD)
-
-func _show_damage_number(amount: int, is_player: bool, is_crit: bool = false) -> void:
-	var dmg_lbl := Label.new()
-	dmg_lbl.text = "-%d" % amount
-	dmg_lbl.add_theme_font_size_override("font_size", 28 if not is_crit else 36)
-	dmg_lbl.modulate = Color(1, 0.3, 0.3) if not is_player else Color(0.3, 0.8, 1)
-	
-	if is_crit:
-		dmg_lbl.text = "CRIT! -%d" % amount
-		dmg_lbl.modulate = Color(1, 0.1, 0.1) if not is_player else Color(1, 0.8, 0.1)
-	
-	var pos = Vector2(200, 150) if is_player else Vector2(950, 150)
-	dmg_lbl.position = pos
-	
-	var shadow := Label.new()
-	shadow.text = dmg_lbl.text
-	shadow.add_theme_font_size_override("font_size", 28 if not is_crit else 36)
-	shadow.modulate = Color(0, 0, 0, 0.5)
-	shadow.position = Vector2(2, 2)
-	dmg_lbl.add_child(shadow)
-	
-	add_child(dmg_lbl)
-	
-	var tween = create_tween()
-	tween.tween_property(dmg_lbl, "position:y", pos.y - 60, 0.6).set_ease(Tween.EASE_OUT)
-	tween.parallel().tween_property(dmg_lbl, "modulate:a", 0, 0.6)
-	tween.tween_callback(dmg_lbl.queue_free)
-
-func _flash_damage(is_player: bool) -> void:
-	var flash_color := Color(1, 0, 0, 0.5)
-	var target_bg = player_bg if is_player else enemy_bg
-	
-	var flash_rect := ColorRect.new()
-	flash_rect.color = flash_color
-	flash_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	target_bg.add_child(flash_rect)
-	
-	var tween = create_tween()
-	tween.tween_property(flash_rect, "modulate:a", 0, 0.15)
-	tween.tween_callback(flash_rect.queue_free)
-
-func _screen_shake(intensity: float = 10.0) -> void:
-	var original_pos = position
-	var tween = create_tween()
-	for i in range(5):
-		tween.tween_property(self, "position", 
-			original_pos + Vector2(randf_range(-intensity, intensity), randf_range(-intensity, intensity)), 0.05)
-	tween.tween_property(self, "position", original_pos, 0.1)
-
-func _show_xp_gain(amount: int) -> void:
-	var xp_lbl := Label.new()
-	xp_lbl.text = "+%d XP" % amount
-	xp_lbl.add_theme_font_size_override("font_size", 24)
-	xp_lbl.modulate = Color(1, 0.9, 0.3)
-	xp_lbl.position = Vector2(500, 400)
-	add_child(xp_lbl)
-	
-	var tween = create_tween()
-	tween.tween_property(xp_lbl, "position:y", 350, 0.5).set_ease(Tween.EASE_OUT)
-	tween.parallel().tween_property(xp_lbl, "modulate:a", 0, 0.5)
-	tween.tween_callback(xp_lbl.queue_free)
-
-func _show_level_up_effect() -> void:
-	var level_up_notification := Label.new()
-	level_up_notification.text = "★ LEVEL UP! ★"
-	level_up_notification.add_theme_font_size_override("font_size", 48)
-	level_up_notification.modulate = Color(1, 0.9, 0.3)
-	level_up_notification.position = Vector2(350, 250)
-	add_child(level_up_notification)
-	
-	var tween = create_tween()
-	tween.tween_property(level_up_notification, "scale", Vector2(1.3, 1.3), 0.3).set_ease(Tween.EASE_OUT)
-	tween.tween_property(level_up_notification, "scale", Vector2(1, 1), 0.3)
-	tween.parallel().tween_property(level_up_notification, "position:y", 200, 0.6)
-	tween.tween_property(level_up_notification, "modulate:a", 0, 0.5)
-	tween.tween_callback(level_up_notification.queue_free)
-
-func _end_combat(player_won: bool, subdued: bool = false) -> void:
+func _end_combat(won: bool, subdued: bool = false) -> void:
 	combat_over = true
 	action_container.visible = false
 	
-	if player_won:
+	if won:
 		if subdued:
-			_log("Encounter ends — subdued enemy may join later.", Color(0.6, 0.9, 0.6))
+			_log("Enemy joins your party!")
 		else:
-			_log("The wanderer falls. You move on.")
-		
-		if not subdued:
-			_show_xp_gain(xp_reward)
-			var leveled_up = GameData.add_xp(xp_reward)
-			await get_tree().create_timer(0.8).timeout
-			_update_xp_display()
-			
-			if leveled_up and GameData.stat_points > 0:
-				_show_level_up_effect()
-				await get_tree().create_timer(0.5).timeout
-				_log("LEVEL UP! Allocating stat points...", Color(1, 0.9, 0.3))
-				await get_tree().create_timer(1.0).timeout
-				
-				var level_up_scene = load("res://level_up_ui.tscn")
-				if level_up_scene:
-					var level_up_ui = level_up_scene.instantiate()
-					add_child(level_up_ui)
-					await level_up_ui.stats_confirmed
-					_log("Stats allocated! You are now level %d!" % GameData.player_level, Color(0.6, 0.9, 0.6))
-				else:
-					_log("ERROR: level_up_ui.tscn not found!")
-					_log("You are now level %d!" % GameData.player_level)
-			elif leveled_up:
-				_log("You are now level %d!" % GameData.player_level)
-		
-		var tween = create_tween()
-		tween.tween_property(enemy_bg, "modulate:a", 0, 1.0)
+			_log("Victory! +50 XP")
+			GameData.add_xp(50)
 	else:
-		_log("You fall. The Ashveld Flats take one more.", Color(0.9, 0.3, 0.3))
-		var tween = create_tween()
-		tween.tween_property(player_bg, "modulate:a", 0, 1.0)
+		_log("You were defeated...")
 	
-	await get_tree().create_timer(2.8).timeout
-	_return_to_world(player_won)
+	await get_tree().create_timer(2.0).timeout
+	_return_to_world(won)
 
-func _return_to_world(_player_won: bool) -> void:
+func _return_to_world(_won: bool) -> void:
+	for i in range(active_party_members.size()):
+		var name = active_party_members[i].get("name", "Unknown")
+		if party_member_hp.has(name):
+			GameData.party_members[i]["hp"] = party_member_hp[name]
 	GameData.save_game()
 	get_tree().change_scene_to_file("res://world.tscn")
 
-func _log(text: String, color: Color = Color(0.78, 0.78, 0.78)) -> void:
+func _update_all_bars() -> void:
+	player_hp_bar.value = player_hp
+	player_hp_label.text = "HP: %d / %d" % [player_hp, player_max_hp]
+	
+	enemy_hp_bar.value = enemy_hp
+	enemy_hp_label.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
+	
+	_update_subdue_button()
+
+func _update_party_ui() -> void:
+	for i in range(active_party_members.size()):
+		var name = active_party_members[i].get("name", "Unknown")
+		var max_hp = active_party_members[i].get("max_hp", 80)
+		var cur = party_member_hp.get(name, max_hp)
+		
+		if i < party_hp_labels.size():
+			party_hp_labels[i].text = "HP: %d/%d" % [cur, max_hp]
+			party_hp_labels[i].modulate = Color(0.7, 0.9, 0.7) if cur > 0 else Color(0.9, 0.3, 0.3)
+		if i < party_hp_bars.size():
+			party_hp_bars[i].value = cur
+
+func _log(text: String) -> void:
 	log_label.text = text
-	log_label.modulate = color
+
+func _show_damage_number(_amount: int, _is_player: bool, _is_crit: bool = false) -> void:
+	pass  # Simplified for now

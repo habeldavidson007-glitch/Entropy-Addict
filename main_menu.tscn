@@ -2,14 +2,9 @@
 
 [ext_resource type="Script" uid="uid://nedfby8mluvm" path="res://main_menu.gd" id="1_06t4h"]
 
-[node name="Main Menu" type="Control" unique_id=748370402]
+[node name="MainMenu" type="Control" unique_id=748370402]
 layout_mode = 3
 anchors_preset = 0
 offset_right = 40.0
 offset_bottom = 40.0
 script = ExtResource("1_06t4h")
-
-[node name="MarginContainer" type="MarginContainer" parent="." unique_id=1448030644]
-layout_mode = 0
-offset_right = 40.0
-offset_bottom = 40.0

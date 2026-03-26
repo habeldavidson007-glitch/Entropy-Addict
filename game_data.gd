@@ -1,7 +1,9 @@
 extends Node
 
+signal quest_completed(quest_id: String)
+
 # ─────────────────────────────────────────
-# PLAYER IDENTITY	
+# PLAYER IDENTITY
 # ─────────────────────────────────────────
 var player_name: String = ""
 var player_color: Color = Color(0.2, 0.8, 0.4)
@@ -10,9 +12,9 @@ var starting_region: String = ""
 var first_habit: String = ""
 
 # ─────────────────────────────────────────
-# GROQ API — Call Generation
+# GROQ API KEY
 # ─────────────────────────────────────────
-var groq_api_key: String = ""
+var groq_api_key: String = "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"
 var groq_model: String = "llama-3.1-8b-instant"
 
 # ─────────────────────────────────────────
@@ -24,7 +26,7 @@ var xp_to_next_level: int = 150
 var stat_points: int = 0
 
 # ─────────────────────────────────────────
-# ATTRIBUTES (Start at 5, can grow beyond)
+# ATTRIBUTES
 # ─────────────────────────────────────────
 var stats: Dictionary = {
 	"physic": 5,
@@ -38,10 +40,10 @@ const STAT_POINTS_PER_LEVEL: int = 3
 const XP_SCALING_FACTOR: float = 1.8
 
 const STAT_POINT_DESCRIPTIONS: Dictionary = {
-	"physic": "HP +10, Damage +2, Defense +1 per point",
+	"physic":    "HP +10, Damage +2, Defense +1 per point",
 	"dexterity": "Initiative +5%, Evasion +3% per point",
 	"intellect": "XP Gain +10%, Skill Power +5% per point",
-	"luck": "Crit +2%, Drop Rate +5%, Flee +3% per point"
+	"luck":      "Crit +2%, Drop Rate +5%, Flee +3% per point"
 }
 
 # ─────────────────────────────────────────
@@ -55,11 +57,90 @@ var last_milestone: int = 0
 const EXPLORATION_XP_BASE: int = 1
 
 # ─────────────────────────────────────────
-# ALPHA/SUBDUE SYSTEM
+# PARTY SYSTEM — NEW
+# ─────────────────────────────────────────
+var party_members: Array = []  # [{name, call, type, hp, max_hp, joined_date, battles_participated}]
+
+func add_party_member(name: String, call: String, enemy_type: String, max_hp: int) -> void:
+	party_members.append({
+		"name": name,
+		"call": call,
+		"type": enemy_type,
+		"hp": max_hp,
+		"max_hp": max_hp,
+		"joined_date": Time.get_unix_time_from_system(),
+		"battles_participated": 0
+	})
+	print("[GameData] %s joined the party! Total members: %d" % [name, party_members.size()])
+	_check_recruit_quest()
+
+func get_party_members() -> Array:
+	return party_members
+
+func get_party_size() -> int:
+	return party_members.size()
+
+func remove_party_member(index: int) -> bool:
+	if index >= 0 and index < party_members.size():
+		party_members.remove_at(index)
+		return true
+	return false
+
+func clear_party() -> void:
+	party_members.clear()
+
+# ─────────────────────────────────────────
+# QUEST SYSTEM — NEW
+# ─────────────────────────────────────────
+var quests: Dictionary = {}
+
+func init_quests() -> void:
+	if not quests.has("recruit_nomad"):
+		quests["recruit_nomad"] = {
+			"title": "Nomad Party Recognition",
+			"description": "Recruit more party members to be recognized as Nomad Party",
+			"requirement": 3,
+			"current": get_party_size(),
+			"completed": false,
+			"reward_xp": 200,
+			"reward_title": "Nomad Leader"
+		}
+
+func _check_recruit_quest() -> void:
+	if quests.has("recruit_nomad") and not quests["recruit_nomad"].completed:
+		quests["recruit_nomad"].current = get_party_size()
+		if get_party_size() >= quests["recruit_nomad"].requirement:
+			_complete_quest("recruit_nomad")
+
+func _complete_quest(quest_id: String) -> void:
+	if quests.has(quest_id):
+		quests[quest_id].completed = true
+		var quest = quests[quest_id]
+		print("[GameData] QUEST COMPLETE: %s" % quest.title)
+		print("[GameData] Reward: %d XP, Title: %s" % [quest.reward_xp, quest.reward_title])
+		add_xp(quest.reward_xp)
+		emit_signal("quest_completed", quest_id)
+
+func get_active_quests() -> Array:
+	var active = []
+	for id in quests:
+		if not quests[id].completed:
+			active.append(quests[id])
+	return active
+
+func get_completed_quests() -> Array:
+	var completed = []
+	for id in quests:
+		if quests[id].completed:
+			completed.append(quests[id])
+	return completed
+
+# ─────────────────────────────────────────
+# ALPHA / SUBDUE SYSTEM
 # ─────────────────────────────────────────
 var subdued_enemies: Array = []
 var alpha_recruits: Array = []
-var generated_enemy_names: Dictionary = {}  # pos -> real_name
+var generated_enemy_names: Dictionary = {}
 
 const SUBDUE_MIN_HP: float = 0.10
 const SUBDUE_MAX_HP: float = 0.30
@@ -106,7 +187,6 @@ func get_subdue_chance() -> float:
 func add_xp(amount: int) -> bool:
 	var bonus = int(amount * get_xp_bonus())
 	player_xp += amount + bonus
-	
 	if player_xp >= xp_to_next_level:
 		level_up()
 		return true
@@ -175,12 +255,12 @@ func reset_exploration() -> void:
 	last_milestone = 0
 
 # ─────────────────────────────────────────
-# CALL SYSTEM — Groq API Generation
+# CALL SYSTEM
 # ─────────────────────────────────────────
 func generate_call(enemy_type: String, enemy_hp_percent: float) -> String:
 	if groq_api_key == "":
 		return _get_fallback_call(enemy_type, enemy_hp_percent)
-	
+
 	var prompt = """You are a game system generating short, poetic character labels called "Calls".
 Rules:
 - Return ONLY the Call text, nothing else
@@ -196,7 +276,7 @@ Generate one Call:""".format({
 		"enemy_type": enemy_type,
 		"hp": int(enemy_hp_percent * 100)
 	})
-	
+
 	var url = "https://api.groq.com/openai/v1/chat/completions"
 	var headers = [
 		"Authorization: Bearer " + groq_api_key,
@@ -208,12 +288,12 @@ Generate one Call:""".format({
 		"temperature": 0.7,
 		"max_tokens": 30
 	})
-	
+
 	var http = HTTPRequest.new()
 	add_child(http)
 	http.request(url, headers, HTTPClient.METHOD_POST, body)
 	var result = await http.request_completed
-	
+
 	if result[1] == 200:
 		var json = JSON.new()
 		if json.parse(result[3].get_string_from_utf8()) == OK:
@@ -222,89 +302,66 @@ Generate one Call:""".format({
 			generated_call = generated_call.trim_prefix('"').trim_suffix('"')
 			http.queue_free()
 			return generated_call if generated_call != "" else _get_fallback_call(enemy_type, enemy_hp_percent)
-	
+
 	http.queue_free()
 	return _get_fallback_call(enemy_type, enemy_hp_percent)
 
 func _get_fallback_call(_enemy_type: String, _hp_percent: float) -> String:
-	"""Fallback Calls with true randomization - more variety"""
 	var calls = [
-		# Physical/Combat focused
 		"Strong body, weak mind",
 		"Hands that know the blade",
 		"Feet that never rest",
 		"Scars that tell no tales",
 		"Strength without direction",
 		"A will that bends, not breaks",
-		
-		# Observant/Quiet types
 		"Eyes that watch the wind",
 		"Silent steps, loud intent",
 		"The quiet before the storm",
 		"Watches more than speaks",
-		
-		# Survivor types
 		"Born to wander, destined to fall",
 		"Outlived three winters",
 		"The road made them hard",
 		"Survival is their only craft",
-		
-		# Psychological
-		"A mind that calculates, a heart that hesitates",
 		"Trusts no one, needs everyone",
 		"Remembers every loss",
 		"Fights for something lost",
-		
-		# Mysterious
 		"Carries a name they won't share",
 		"Hides more than shows",
 		"The past follows close",
 		"Not who they appear"
 	]
-	
-	# True randomization - not based on HP
-	var random_index = randi() % calls.size()
-	return calls[random_index]
+	return calls[randi() % calls.size()]
 
 # ─────────────────────────────────────────
 # ENEMY NAME GENERATION
 # ─────────────────────────────────────────
 func generate_enemy_real_name() -> String:
-	"""Generate a realistic name for subdued enemies"""
 	var first_names = [
 		"Ghiar", "Maren", "Voss", "Kael", "Ryn", "Tessa", "Durn", "Hals",
 		"Varek", "Senne", "Renk", "Bran", "Essa", "Tom", "Ille", "Deva",
 		"Jarger", "Maret", "Ossel", "Ferren", "Rogic", "Vorren", "Orren",
 		"Halvec", "Ash", "Rel", "Dun", "Vas", "Mert", "Cur"
 	]
-	
 	var last_names = [
 		"of the Flats", "Ash-born", "the Wanderer", "the Broken",
 		"the Silent", "the Watcher", "the Lost", "the Survivor",
 		"of the Road", "the Exile", "the Remnant", "the Lone",
 		"the Unnamed", "the Forgotten", "the Last", "the First"
 	]
-	
 	var first = first_names[randi() % first_names.size()]
 	var last = last_names[randi() % last_names.size()]
-	
-	# 30% chance for just first name
 	if randf() < 0.3:
 		return first
-	else:
-		return first + " " + last
+	return first + " " + last
 
 func get_or_generate_enemy_name(pos: Vector2) -> String:
-	"""Get existing name or generate new one"""
 	if generated_enemy_names.has(pos):
 		return generated_enemy_names[pos]
-	
 	var new_name = generate_enemy_real_name()
 	generated_enemy_names[pos] = new_name
 	return new_name
 
 func clear_enemy_name(pos: Vector2) -> void:
-	"""Clear name when enemy is removed"""
 	generated_enemy_names.erase(pos)
 
 # ─────────────────────────────────────────
@@ -316,7 +373,6 @@ func can_subdue(enemy_hp_percent: float) -> bool:
 func attempt_subdue(enemy_name: String, enemy_call: String, enemy_type: String) -> bool:
 	var roll = randf()
 	var chance = get_subdue_chance()
-	
 	if roll < chance:
 		subdued_enemies.append({
 			"name": enemy_name,
@@ -331,11 +387,24 @@ func attempt_subdue(enemy_name: String, enemy_call: String, enemy_type: String) 
 		print("❌ Subdue failed — enemy escapes")
 		return false
 
+func add_subdued_enemy(enemy_id: String, name: String, call: String, enemy_type: String) -> void:
+	subdued_enemies.append({
+		"id": enemy_id,
+		"name": name,
+		"call": call,
+		"type": enemy_type,
+		"subdued_at_level": player_level
+	})
+	print("[GameData] Subdued: %s" % name)
+
+func get_subdued_enemies() -> Array:
+	return subdued_enemies
+
 func recruit_as_alpha(enemy_data: Dictionary) -> bool:
 	if enemy_data.get("potential_alpha", false):
 		alpha_recruits.append(enemy_data)
 		subdued_enemies.erase(enemy_data)
-		print("🎯 %s joins as Delegated Alpha" % enemy_data.name)
+		print("🎯 %s joins as Delegated Alpha" % enemy_data.get("name", "Unknown"))
 		return true
 	return false
 
@@ -416,9 +485,12 @@ func save_game() -> void:
 			"last_milestone": last_milestone,
 			"subdued_enemies": subdued_enemies,
 			"alpha_recruits": alpha_recruits,
-			"groq_key_set": groq_api_key != ""
+			"party_members": party_members,
+			"quests": quests,
+			"groq_key_saved": groq_api_key != ""
 		}
 		file.store_string(JSON.stringify(data))
+		print("💾 Game saved.")
 
 func load_game() -> void:
 	if not FileAccess.file_exists("user://save.dat"):
@@ -429,30 +501,31 @@ func load_game() -> void:
 	var json := JSON.new()
 	if json.parse(file.get_as_text()) == OK:
 		var data: Dictionary = json.get_data()
-		player_name = data.get("name", player_name)
-		player_color = Color.html(data.get("color", player_color.to_html()))
-		player_emoticon = data.get("emoticon", player_emoticon)
-		starting_region = data.get("region", starting_region)
-		first_habit = data.get("habit", first_habit)
-		player_level = data.get("level", 1)
-		player_xp = data.get("xp", 0)
-		xp_to_next_level = data.get("xp_next", 150)
-		stat_points = data.get("stat_points", 0)
-		stats = data.get("stats", {
-			"physic": BASE_STAT_VALUE,
-			"dexterity": BASE_STAT_VALUE,
-			"intellect": BASE_STAT_VALUE,
-			"luck": BASE_STAT_VALUE
+		player_name             = data.get("name",           player_name)
+		player_color            = Color.html(data.get("color", player_color.to_html()))
+		player_emoticon         = data.get("emoticon",       player_emoticon)
+		starting_region         = data.get("region",         starting_region)
+		first_habit             = data.get("habit",          first_habit)
+		player_level            = data.get("level",          1)
+		player_xp               = data.get("xp",             0)
+		xp_to_next_level        = data.get("xp_next",        150)
+		stat_points             = data.get("stat_points",    0)
+		stats                   = data.get("stats", {
+			"physic":     BASE_STAT_VALUE,
+			"dexterity":  BASE_STAT_VALUE,
+			"intellect":  BASE_STAT_VALUE,
+			"luck":       BASE_STAT_VALUE
 		})
-		explored_tiles_count = data.get("explored_tiles", 0)
-		total_map_tiles = data.get("total_tiles", 0)
+		explored_tiles_count    = data.get("explored_tiles", 0)
+		total_map_tiles         = data.get("total_tiles",    0)
 		familiar_environment_bonus = data.get("familiar_bonus", 0)
-		last_milestone = data.get("last_milestone", 0)
-		subdued_enemies = data.get("subdued_enemies", [])
-		alpha_recruits = data.get("alpha_recruits", [])
-		if data.get("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", false):
-			print("🔑 Groq API key loaded from save")
+		last_milestone          = data.get("last_milestone", 0)
+		subdued_enemies         = data.get("subdued_enemies", [])
+		alpha_recruits          = data.get("alpha_recruits",  [])
+		party_members           = data.get("party_members", [])
+		quests                  = data.get("quests", {})
 		calculate_exploration_percentage()
+		print("📂 Game loaded — Level %d, %s, Party: %d members" % [player_level, starting_region, party_members.size()])
 
 # ─────────────────────────────────────────
 # HELPERS
@@ -464,19 +537,21 @@ func get_spawn_position() -> Vector2:
 
 func get_stat_display_name(stat: String) -> String:
 	match stat:
-		"physic": return "PHY"
+		"physic":    return "PHY"
 		"dexterity": return "DEX"
 		"intellect": return "INT"
-		"luck": return "LCK"
+		"luck":      return "LCK"
 	return stat
 
 func reset_stats_to_base() -> void:
 	stats = {
-		"physic": BASE_STAT_VALUE,
+		"physic":    BASE_STAT_VALUE,
 		"dexterity": BASE_STAT_VALUE,
 		"intellect": BASE_STAT_VALUE,
-		"luck": BASE_STAT_VALUE
+		"luck":      BASE_STAT_VALUE
 	}
 	stat_points = 0
 	subdued_enemies.clear()
 	alpha_recruits.clear()
+	party_members.clear()
+	quests.clear()
