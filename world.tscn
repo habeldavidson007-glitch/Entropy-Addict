@@ -1,5 +1,6 @@
 [gd_scene format=3 uid="uid://bakc5ol2516lu"]
 
+[ext_resource type="PackedScene" uid="uid://xhyrxuqi3v6t" path="res://scenes/ui/codex_ui.tscn" id="1_codex"]
 [ext_resource type="Script" uid="uid://b2fs6nmhfgj0s" path="res://scripts/player/character_body_2d.gd" id="1_f3sb7"]
 [ext_resource type="Script" uid="uid://87s0ljek3ubp" path="res://world.gd" id="1_fj7yv"]
 
@@ -8,3 +9,5 @@ script = ExtResource("1_fj7yv")
 
 [node name="CharacterBody2D" type="CharacterBody2D" parent="." unique_id=563573226]
 script = ExtResource("1_f3sb7")
+
+[node name="CodexUI" parent="." instance=ExtResource("1_codex")]

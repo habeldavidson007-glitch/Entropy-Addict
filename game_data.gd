@@ -1,21 +1,62 @@
 extends Node
 
+# ─────────────────────────────────────────
+# SIGNALS - Event-driven architecture
+# ─────────────────────────────────────────
 signal quest_completed(quest_id: String)
+signal party_member_added(member_data: Dictionary)
+signal party_member_removed(index: int)
+signal stat_changed(stat_name: String, new_value: int)
+signal level_changed(new_level: int)
+signal xp_changed(current_xp: int, xp_to_next: int)
+signal exploration_milestone_reached(percentage: int)
+# Signals used by external scripts (Combat.gd, World.gd)
+# signal combat_started(enemy_data: Dictionary)
+# signal combat_finished(victory: bool)
+signal game_saved
+signal game_loaded
 
 # ─────────────────────────────────────────
 # PLAYER IDENTITY
 # ─────────────────────────────────────────
-var player_name: String = ""
-var player_color: Color = Color(0.2, 0.8, 0.4)
-var player_emoticon: String = "◈"
-var starting_region: String = ""
-var first_habit: String = ""
+@export var player_name: String = ""
+@export var player_color: Color = Color(0.2, 0.8, 0.4)
+@export var player_emoticon: String = "◈"
+@export var starting_region: String = ""
+@export var first_habit: String = ""
 
 # ─────────────────────────────────────────
-# GROQ API KEY
+# GROQ API CONFIGURATION
+# Load from config file for security
 # ─────────────────────────────────────────
-var groq_api_key: String = "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"
-var groq_model: String = "llama-3.1-8b-instant"
+@export var groq_api_key: String = ""
+@export var groq_model: String = "llama-3.1-8b-instant"
+
+const CONFIG_PATH: String = "user://config.cfg"
+
+func _ready() -> void:
+	_load_api_key_from_config()
+
+func _load_api_key_from_config() -> void:
+	if FileAccess.file_exists(CONFIG_PATH):
+		var config = ConfigFile.new()
+		config.load(CONFIG_PATH)
+		groq_api_key = config.get_value("api", "groq_key", "")
+		groq_model = config.get_value("api", "groq_model", "llama-3.1-8b-instant")
+	else:
+		# Create default config if it doesn't exist
+		_save_api_key_to_config()
+
+func _save_api_key_to_config() -> void:
+	var config = ConfigFile.new()
+	config.set_value("api", "groq_key", groq_api_key)
+	config.set_value("api", "groq_model", groq_model)
+	config.save(CONFIG_PATH)
+
+func set_api_key(key: String, model: String = "llama-3.1-8b-instant") -> void:
+	groq_api_key = key
+	groq_model = model
+	_save_api_key_to_config()
 
 # ─────────────────────────────────────────
 # LEVEL & XP SYSTEM
@@ -61,17 +102,23 @@ const EXPLORATION_XP_BASE: int = 1
 # ─────────────────────────────────────────
 var party_members: Array = []  # [{name, call, type, hp, max_hp, joined_date, battles_participated}]
 
-func add_party_member(name: String, call: String, enemy_type: String, max_hp: int) -> void:
-	party_members.append({
-		"name": name,
-		"call": call,
+func add_party_member(member_name: String, member_call: String, enemy_type: String, max_hp: int) -> void:
+	var member_data = {
+		"name": member_name,
+		"call": member_call,
 		"type": enemy_type,
 		"hp": max_hp,
 		"max_hp": max_hp,
 		"joined_date": Time.get_unix_time_from_system(),
-		"battles_participated": 0
-	})
-	print("[GameData] %s joined the party! Total members: %d" % [name, party_members.size()])
+		"battles_participated": 0,
+		"level": player_level,
+		"stats": stats.duplicate(),
+		"special_abilities": [],
+		"loyalty": 1.0
+	}
+	party_members.append(member_data)
+	print("[GameData] %s joined the party! Total members: %d" % [member_name, party_members.size()])
+	emit_signal("party_member_added", member_data)
 	_check_recruit_quest()
 
 func get_party_members() -> Array:
@@ -82,12 +129,30 @@ func get_party_size() -> int:
 
 func remove_party_member(index: int) -> bool:
 	if index >= 0 and index < party_members.size():
+		var removed_member = party_members[index]
 		party_members.remove_at(index)
+		emit_signal("party_member_removed", index)
+		print("[GameData] %s left the party." % removed_member.get("name", "Unknown"))
 		return true
 	return false
 
 func clear_party() -> void:
 	party_members.clear()
+	emit_signal("party_member_removed", -1)  # Signal that all were removed
+
+func get_party_member_stats(index: int) -> Dictionary:
+	if index >= 0 and index < party_members.size():
+		return party_members[index].get("stats", stats.duplicate())
+	return stats.duplicate()
+
+func update_party_member_hp(index: int, new_hp: int) -> void:
+	if index >= 0 and index < party_members.size():
+		var max_hp = party_members[index].get("max_hp", 80)
+		party_members[index]["hp"] = clamp(new_hp, 0, max_hp)
+
+func increment_battle_participation(index: int) -> void:
+	if index >= 0 and index < party_members.size():
+		party_members[index]["battles_participated"] += 1
 
 # ─────────────────────────────────────────
 # QUEST SYSTEM — NEW
@@ -121,6 +186,12 @@ func _complete_quest(quest_id: String) -> void:
 		add_xp(quest.reward_xp)
 		emit_signal("quest_completed", quest_id)
 
+func update_quest_progress(quest_id: String, progress_amount: int = 1) -> void:
+	if quests.has(quest_id) and not quests[quest_id].completed:
+		quests[quest_id].current += progress_amount
+		if quests[quest_id].current >= quests[quest_id].requirement:
+			_complete_quest(quest_id)
+
 func get_active_quests() -> Array:
 	var active = []
 	for id in quests:
@@ -134,6 +205,21 @@ func get_completed_quests() -> Array:
 		if quests[id].completed:
 			completed.append(quests[id])
 	return completed
+
+func get_quest_by_id(quest_id: String) -> Dictionary:
+	return quests.get(quest_id, {})
+
+func add_quest(quest_id: String, title: String, description: String, requirement: int, reward_xp: int, reward_title: String = "") -> void:
+	if not quests.has(quest_id):
+		quests[quest_id] = {
+			"title": title,
+			"description": description,
+			"requirement": requirement,
+			"current": 0,
+			"completed": false,
+			"reward_xp": reward_xp,
+			"reward_title": reward_title
+		}
 
 # ─────────────────────────────────────────
 # ALPHA / SUBDUE SYSTEM
@@ -186,18 +272,29 @@ func get_subdue_chance() -> float:
 # ─────────────────────────────────────────
 func add_xp(amount: int) -> bool:
 	var bonus = int(amount * get_xp_bonus())
-	player_xp += amount + bonus
-	if player_xp >= xp_to_next_level:
+	var total_gained = amount + bonus
+	player_xp += total_gained
+	emit_signal("xp_changed", player_xp, xp_to_next_level)
+	
+	var leveled_up = false
+	while player_xp >= xp_to_next_level:
 		level_up()
-		return true
-	return false
+		leveled_up = true
+	
+	return leveled_up
 
 func level_up() -> void:
 	player_level += 1
 	player_xp -= xp_to_next_level
 	xp_to_next_level = int(xp_to_next_level * XP_SCALING_FACTOR)
 	stat_points += STAT_POINTS_PER_LEVEL
+	
+	# Heal party members on level up
+	for i in range(party_members.size()):
+		increment_battle_participation(i)
+	
 	print("★ Level Up! Now level %d | Stat Points: %d" % [player_level, stat_points])
+	emit_signal("level_changed", player_level)
 
 func get_xp_progress() -> float:
 	if xp_to_next_level == 0:
@@ -211,6 +308,7 @@ func increase_stat(stat_name: String) -> bool:
 	if can_increase_stat(stat_name):
 		stats[stat_name] += 1
 		stat_points -= 1
+		emit_signal("stat_changed", stat_name, stats[stat_name])
 		return true
 	return false
 
@@ -218,8 +316,23 @@ func decrease_stat(stat_name: String) -> bool:
 	if stats.get(stat_name, BASE_STAT_VALUE) > BASE_STAT_VALUE:
 		stats[stat_name] -= 1
 		stat_points += 1
+		emit_signal("stat_changed", stat_name, stats[stat_name])
 		return true
 	return false
+
+func get_all_derived_stats() -> Dictionary:
+	return {
+		"max_hp": get_max_hp(),
+		"base_damage": get_base_damage(),
+		"base_defense": get_base_defense(),
+		"initiative_bonus": get_initiative_bonus(),
+		"evasion_chance": get_evasion_chance(),
+		"xp_bonus": get_xp_bonus(),
+		"crit_chance": get_crit_chance(),
+		"drop_bonus": get_drop_bonus(),
+		"flee_bonus": get_flee_bonus(),
+		"subdue_chance": get_subdue_chance()
+	}
 
 # ─────────────────────────────────────────
 # EXPLORATION FUNCTIONS
@@ -244,15 +357,20 @@ func check_exploration_milestones() -> void:
 		familiar_environment_bonus += 10
 		last_milestone = current_milestone
 		print("🌍 FAMILIAR ENVIRONMENT BONUS: +%d" % 10)
+		emit_signal("exploration_milestone_reached", current_milestone * 10)
 
-func get_exploration_display() -> String:
-	return "%.1f%%" % exploration_percentage
+func get_familiar_environment_damage_bonus() -> float:
+	return float(familiar_environment_bonus) / 100.0
 
 func reset_exploration() -> void:
 	explored_tiles_count = 0
 	exploration_percentage = 0.0
 	familiar_environment_bonus = 0
 	last_milestone = 0
+	emit_signal("exploration_milestone_reached", 0)
+
+func get_exploration_display() -> String:
+	return "%.1f%%" % exploration_percentage
 
 # ─────────────────────────────────────────
 # CALL SYSTEM
@@ -387,15 +505,15 @@ func attempt_subdue(enemy_name: String, enemy_call: String, enemy_type: String) 
 		print("❌ Subdue failed — enemy escapes")
 		return false
 
-func add_subdued_enemy(enemy_id: String, name: String, call: String, enemy_type: String) -> void:
+func add_subdued_enemy(enemy_id: String, enemy_name: String, enemy_call: String, enemy_type: String) -> void:
 	subdued_enemies.append({
 		"id": enemy_id,
-		"name": name,
-		"call": call,
+		"name": enemy_name,
+		"call": enemy_call,
 		"type": enemy_type,
 		"subdued_at_level": player_level
 	})
-	print("[GameData] Subdued: %s" % name)
+	print("[GameData] Subdued: %s" % enemy_name)
 
 func get_subdued_enemies() -> Array:
 	return subdued_enemies
@@ -487,45 +605,84 @@ func save_game() -> void:
 			"alpha_recruits": alpha_recruits,
 			"party_members": party_members,
 			"quests": quests,
+			"generated_enemy_names": generated_enemy_names,
+			"timestamp": Time.get_unix_time_from_system(),
+			"playtime_seconds": _get_playtime_seconds(),
 			"groq_key_saved": groq_api_key != ""
 		}
-		file.store_string(JSON.stringify(data))
-		print("💾 Game saved.")
+		var json_string = JSON.stringify(data, "\t")
+		file.store_string(json_string)
+		print("💾 Game saved successfully.")
+		emit_signal("game_saved")
+
+var _playtime_start: int = 0
+var _total_playtime: int = 0
+
+func _get_playtime_seconds() -> int:
+	var current_session: float = 0.0
+	if _playtime_start > 0:
+		current_session = Time.get_unix_time_from_system() - _playtime_start
+	return _total_playtime + int(current_session)
+
+func start_playtime_tracking() -> void:
+	_playtime_start = Time.get_unix_time_from_system()
+
+func stop_playtime_tracking() -> void:
+	if _playtime_start > 0:
+		var session_time: float = Time.get_unix_time_from_system() - _playtime_start
+		_total_playtime += int(session_time)
+		_playtime_start = 0
 
 func load_game() -> void:
 	if not FileAccess.file_exists("user://save.dat"):
+		print("[GameData] No save file found.")
 		return
+		
 	var file := FileAccess.open("user://save.dat", FileAccess.READ)
 	if not file:
+		print("[GameData] Failed to open save file.")
 		return
+		
 	var json := JSON.new()
-	if json.parse(file.get_as_text()) == OK:
-		var data: Dictionary = json.get_data()
-		player_name             = data.get("name",           player_name)
-		player_color            = Color.html(data.get("color", player_color.to_html()))
-		player_emoticon         = data.get("emoticon",       player_emoticon)
-		starting_region         = data.get("region",         starting_region)
-		first_habit             = data.get("habit",          first_habit)
-		player_level            = data.get("level",          1)
-		player_xp               = data.get("xp",             0)
-		xp_to_next_level        = data.get("xp_next",        150)
-		stat_points             = data.get("stat_points",    0)
-		stats                   = data.get("stats", {
-			"physic":     BASE_STAT_VALUE,
-			"dexterity":  BASE_STAT_VALUE,
-			"intellect":  BASE_STAT_VALUE,
-			"luck":       BASE_STAT_VALUE
-		})
-		explored_tiles_count    = data.get("explored_tiles", 0)
-		total_map_tiles         = data.get("total_tiles",    0)
-		familiar_environment_bonus = data.get("familiar_bonus", 0)
-		last_milestone          = data.get("last_milestone", 0)
-		subdued_enemies         = data.get("subdued_enemies", [])
-		alpha_recruits          = data.get("alpha_recruits",  [])
-		party_members           = data.get("party_members", [])
-		quests                  = data.get("quests", {})
-		calculate_exploration_percentage()
-		print("📂 Game loaded — Level %d, %s, Party: %d members" % [player_level, starting_region, party_members.size()])
+	var parse_result = json.parse(file.get_as_text())
+	
+	if parse_result != OK:
+		print("[GameData] Failed to parse save file. Error: %d" % parse_result)
+		file.close()
+		return
+		
+	var data: Dictionary = json.get_data()
+	
+	player_name             = data.get("name",           player_name)
+	player_color            = Color.html(data.get("color", player_color.to_html()))
+	player_emoticon         = data.get("emoticon",       player_emoticon)
+	starting_region         = data.get("region",         starting_region)
+	first_habit             = data.get("habit",          first_habit)
+	player_level            = data.get("level",          1)
+	player_xp               = data.get("xp",             0)
+	xp_to_next_level        = data.get("xp_next",        150)
+	stat_points             = data.get("stat_points",    0)
+	stats                   = data.get("stats", {
+		"physic":     BASE_STAT_VALUE,
+		"dexterity":  BASE_STAT_VALUE,
+		"intellect":  BASE_STAT_VALUE,
+		"luck":       BASE_STAT_VALUE
+	})
+	explored_tiles_count    = data.get("explored_tiles", 0)
+	total_map_tiles         = data.get("total_tiles",    0)
+	familiar_environment_bonus = data.get("familiar_bonus", 0)
+	last_milestone          = data.get("last_milestone", 0)
+	subdued_enemies         = data.get("subdued_enemies", [])
+	alpha_recruits          = data.get("alpha_recruits",  [])
+	party_members           = data.get("party_members", [])
+	quests                  = data.get("quests", {})
+	generated_enemy_names   = data.get("generated_enemy_names", {})
+	
+	calculate_exploration_percentage()
+	file.close()
+	
+	print("📂 Game loaded — Level %d, %s, Party: %d members" % [player_level, starting_region, party_members.size()])
+	emit_signal("game_loaded")
 
 # ─────────────────────────────────────────
 # HELPERS
