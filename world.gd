@@ -83,7 +83,7 @@ func _ready() -> void:
 	GameData.total_map_tiles = terrain_map.size()
 	print("🗺 World initialized: %dx%d (%d tiles)" % [MAP_WIDTH, MAP_HEIGHT, terrain_map.size()])
 	
-	var spawn := GameData.get_spawn_position()
+	var spawn: Vector2i = GameData.get_spawn_position()
 	_player_grid = spawn
 	_reveal_around(spawn)
 	_update_level_display()
@@ -286,7 +286,7 @@ func _show_milestone_notification(percentage: int) -> void:
 # TERRAIN GENERATION
 # ─────────────────────────────────────────
 func _generate_ashveld_terrain() -> void:
-	var spawn := GameData.get_spawn_position()
+	var spawn: Vector2i = GameData.get_spawn_position()
 	
 	for x in range(MAP_WIDTH):
 		for y in range(MAP_HEIGHT):
@@ -361,7 +361,7 @@ func _create_dirt_paths(count: int) -> void:
 # ENEMY SPAWNING
 # ─────────────────────────────────────────
 func _spawn_enemies() -> void:
-	var spawn := GameData.get_spawn_position()
+	var spawn: Vector2i = GameData.get_spawn_position()
 	var placed := 0
 	var attempts := 0
 	var max_enemies = enemy_count

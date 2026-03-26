@@ -371,12 +371,6 @@ func reset_exploration() -> void:
 func get_exploration_display() -> String:
 	return "%.1f%%" % exploration_percentage
 
-func reset_exploration() -> void:
-	explored_tiles_count = 0
-	exploration_percentage = 0.0
-	familiar_environment_bonus = 0
-	last_milestone = 0
-
 # ─────────────────────────────────────────
 # CALL SYSTEM
 # ─────────────────────────────────────────
