@@ -107,8 +107,8 @@ func _connect_game_data_signals() -> void:
 		GameData.party_member_removed.connect(_on_party_member_removed)
 	if GameData.has_signal("exploration_milestone_reached"):
 		GameData.exploration_milestone_reached.connect(_on_exploration_milestone)
-	if GameData.has_signal("combat_finished"):
-		GameData.combat_finished.connect(_on_combat_finished)
+	# Note: combat_finished signal is emitted by Combat scene, not GameData
+	# No need to connect here as Combat handles its own cleanup
 	
 	_game_data_connected = true
 
@@ -129,11 +129,6 @@ func _on_party_member_removed(_index: int) -> void:
 func _on_exploration_milestone(percentage: int) -> void:
 	_show_milestone_notification(percentage)
 
-func _on_combat_finished(_victory: bool) -> void:
-	# Refresh enemy visibility after combat
-	if is_instance_valid(self):
-		_reveal_around(_player_grid)
-		queue_redraw()
 
 # ─────────────────────────────────────────
 # UI SETUP
@@ -193,12 +188,12 @@ func _update_party_status() -> void:
 	if not party_status_label:
 		return
 	
-	if GameData.party.is_empty():
+	if GameData.party_members.is_empty():
 		party_status_label.text = "👤 Solo"
 		return
 	
 	var party_names: Array[String] = []
-	for member in GameData.party:
+	for member in GameData.party_members:
 		party_names.append(member.get("name", "Unknown"))
 	
 	party_status_label.text = "👥 Party: %s" % ", ".join(party_names)
