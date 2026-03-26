@@ -71,12 +71,7 @@ func _ready() -> void:
 	_build_clean_ui()
 	_update_subdue_button()
 	
-	# Emit combat started signal
-	GameData.emit_signal("combat_started", {
-		"enemy_name": enemy_name,
-		"enemy_call": enemy_call,
-		"enemy_type": enemy_type
-	})
+	# Combat started - no signal needed as GameData doesn't have this signal
 
 func _build_clean_ui() -> void:
 	var bg := ColorRect.new()
@@ -572,8 +567,7 @@ func _end_combat(won: bool, subdued: bool = false) -> void:
 		GameData.player_xp = max(0, GameData.player_xp - xp_loss)
 		_log("Defeat penalty: -%d XP" % xp_loss)
 
-	# Emit combat finished signal
-	GameData.emit_signal("combat_finished", won)
+	# Combat finished - emit our local signal only (GameData doesn't have this signal)
 	emit_signal("combat_finished", won)
 
 	await get_tree().create_timer(2.0).timeout

@@ -10,7 +10,7 @@ func _ready():
 	visible = false
 	print("[CodexUI] Ready - waiting for signal")
 	
-	# Get parent and connect signal
+	# Get parent (WorldMap) and connect signal
 	var parent = get_parent()
 	if parent:
 		print("[CodexUI] Parent is: ", parent.name)

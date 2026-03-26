@@ -625,7 +625,7 @@ func _get_playtime_seconds() -> int:
 	return _total_playtime + int(current_session)
 
 func start_playtime_tracking() -> void:
-	_playtime_start = int(Time.get_unix_time_from_system())
+	_playtime_start = Time.get_unix_time_from_system()
 
 func stop_playtime_tracking() -> void:
 	if _playtime_start > 0:

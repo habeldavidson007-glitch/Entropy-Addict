@@ -1,4 +1,12 @@
 ```
+# Godot-specific ignores
+*.import
+*.remap
+export_presets.cfg
+.autoload_register
+.editor
+.godot/
+
 # Compiled and build artifacts
 *.pyc
 __pycache__/
@@ -7,49 +15,53 @@ __pycache__/
 *.exe
 *.dll
 *.so
-*.class
+*.a
 *.out
 
 # Dependencies
-node_modules/
-venv/
 .venv/
-.env
-.env.local
-*.env.*
-
-# Build directories
+venv/
+node_modules/
 dist/
 build/
 target/
 .gradle/
-
-# Python specific
-*.pyc
-__pycache__/
-*.pyo
-*.pyd
-.Python
-*.so
-.coverage
-coverage/
-htmlcov/
 .mypy_cache/
 .pytest_cache/
+.julia/
+zig*/
 
 # Logs and temp files
 *.log
 *.tmp
 *.swp
 *.swo
+*.bak
+*.~*
+*~
+
+# Environment variables
+.env
+.env.local
+.env.*
 
 # OS generated files
 .DS_Store
 Thumbs.db
+desktop.ini
+Icon?
+ehthumbs.db
 
 # Editors
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# Coverage reports
+coverage/
+htmlcov/
+.coverage
 
 # Compressed files
 *.zip

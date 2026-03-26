@@ -7,6 +7,9 @@ class_name WorldMap
 # Enhanced for Open World Turn-Based SRPG
 # ─────────────────────────────────────────
 
+## Signal for opening the Codex UI
+signal codex_open_requested(profile: CharacterProfile)
+
 ## Core map configuration
 const TILE_SIZE: int = 32
 const MAP_WIDTH: int = 40

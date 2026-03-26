@@ -1,7 +1,5 @@
 extends CharacterBody2D
 
-signal codex_open_requested
-
 const TILE_SIZE: int = 32
 const MOVE_DURATION: float = 0.15
 
