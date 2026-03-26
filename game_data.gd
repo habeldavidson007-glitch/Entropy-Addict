@@ -10,8 +10,9 @@ signal stat_changed(stat_name: String, new_value: int)
 signal level_changed(new_level: int)
 signal xp_changed(current_xp: int, xp_to_next: int)
 signal exploration_milestone_reached(percentage: int)
-signal combat_started(enemy_data: Dictionary)
-signal combat_finished(victory: bool)
+# Signals used by external scripts (Combat.gd, World.gd)
+# signal combat_started(enemy_data: Dictionary)
+# signal combat_finished(victory: bool)
 signal game_saved
 signal game_loaded
 
@@ -101,10 +102,10 @@ const EXPLORATION_XP_BASE: int = 1
 # ─────────────────────────────────────────
 var party_members: Array = []  # [{name, call, type, hp, max_hp, joined_date, battles_participated}]
 
-func add_party_member(name: String, call: String, enemy_type: String, max_hp: int) -> void:
+func add_party_member(member_name: String, member_call: String, enemy_type: String, max_hp: int) -> void:
 	var member_data = {
-		"name": name,
-		"call": call,
+		"name": member_name,
+		"call": member_call,
 		"type": enemy_type,
 		"hp": max_hp,
 		"max_hp": max_hp,
@@ -116,7 +117,7 @@ func add_party_member(name: String, call: String, enemy_type: String, max_hp: in
 		"loyalty": 1.0
 	}
 	party_members.append(member_data)
-	print("[GameData] %s joined the party! Total members: %d" % [name, party_members.size()])
+	print("[GameData] %s joined the party! Total members: %d" % [member_name, party_members.size()])
 	emit_signal("party_member_added", member_data)
 	_check_recruit_quest()
 
@@ -504,15 +505,15 @@ func attempt_subdue(enemy_name: String, enemy_call: String, enemy_type: String) 
 		print("❌ Subdue failed — enemy escapes")
 		return false
 
-func add_subdued_enemy(enemy_id: String, name: String, call: String, enemy_type: String) -> void:
+func add_subdued_enemy(enemy_id: String, enemy_name: String, enemy_call: String, enemy_type: String) -> void:
 	subdued_enemies.append({
 		"id": enemy_id,
-		"name": name,
-		"call": call,
+		"name": enemy_name,
+		"call": enemy_call,
 		"type": enemy_type,
 		"subdued_at_level": player_level
 	})
-	print("[GameData] Subdued: %s" % name)
+	print("[GameData] Subdued: %s" % enemy_name)
 
 func get_subdued_enemies() -> Array:
 	return subdued_enemies
@@ -618,14 +619,18 @@ var _playtime_start: int = 0
 var _total_playtime: int = 0
 
 func _get_playtime_seconds() -> int:
-	return _total_playtime + int((Time.get_unix_time_from_system() - _playtime_start) if _playtime_start > 0 else 0)
+	var current_session: float = 0.0
+	if _playtime_start > 0:
+		current_session = Time.get_unix_time_from_system() - _playtime_start
+	return _total_playtime + int(current_session)
 
 func start_playtime_tracking() -> void:
 	_playtime_start = Time.get_unix_time_from_system()
 
 func stop_playtime_tracking() -> void:
 	if _playtime_start > 0:
-		_total_playtime += Time.get_unix_time_from_system() - _playtime_start
+		var session_time: float = Time.get_unix_time_from_system() - _playtime_start
+		_total_playtime += int(session_time)
 		_playtime_start = 0
 
 func load_game() -> void:

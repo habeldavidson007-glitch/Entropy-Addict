@@ -112,24 +112,24 @@ func _connect_game_data_signals() -> void:
 	
 	_game_data_connected = true
 
-func _on_level_changed(new_level: int) -> void:
+func _on_level_changed(_new_level: int) -> void:
 	_update_level_display()
 	_show_level_up_world_effect()
 
-func _on_xp_changed(current_xp: int, xp_to_next: int) -> void:
+func _on_xp_changed(_current_xp: int, _xp_to_next: int) -> void:
 	_update_level_display()
 
 func _on_party_member_added(member_data: Dictionary) -> void:
 	_update_party_status()
 	_show_party_member_join_notification(member_data.get("name", "Unknown"))
 
-func _on_party_member_removed(index: int) -> void:
+func _on_party_member_removed(_index: int) -> void:
 	_update_party_status()
 
 func _on_exploration_milestone(percentage: int) -> void:
 	_show_milestone_notification(percentage)
 
-func _on_combat_finished(victory: bool) -> void:
+func _on_combat_finished(_victory: bool) -> void:
 	# Refresh enemy visibility after combat
 	if is_instance_valid(self):
 		_reveal_around(_player_grid)
@@ -184,9 +184,9 @@ func _update_level_display() -> void:
 			GameData.player_level,
 			GameData.player_xp,
 			GameData.xp_to_next_level,
-			derived_stats.damage,
-			derived_stats.defense,
-			derived_stats.evasion * 100
+			derived_stats.base_damage,
+			derived_stats.base_defense,
+			derived_stats.evasion_chance * 100
 		]
 
 func _update_party_status() -> void:
@@ -798,25 +798,25 @@ func remove_enemy_at_position(pos: Vector2) -> bool:
 	return false
 
 func get_all_visible_enemies() -> Array[Dictionary]:
-	var visible: Array[Dictionary] = []
+	var visible_enemies: Array[Dictionary] = []
 	for enemy in enemy_data:
 		if visible_tiles.has(enemy.pos):
-			visible.append(enemy)
-	return visible
+			visible_enemies.append(enemy)
+	return visible_enemies
 
 func get_enemies_by_difficulty(difficulty: String) -> Array[Dictionary]:
-	var filtered: Array[Dictionary] = []
+	var filtered_diff: Array[Dictionary] = []
 	for enemy in enemy_data:
 		if enemy.get("difficulty", "") == difficulty:
-			filtered.append(enemy)
-	return filtered
+			filtered_diff.append(enemy)
+	return filtered_diff
 
 func get_enemies_by_alpha_type(alpha_type: String) -> Array[Dictionary]:
-	var filtered: Array[Dictionary] = []
+	var filtered_alpha: Array[Dictionary] = []
 	for enemy in enemy_data:
 		if enemy.get("alpha_type", "") == alpha_type:
-			filtered.append(enemy)
-	return filtered
+			filtered_alpha.append(enemy)
+	return filtered_alpha
 
 func get_total_enemy_count() -> int:
 	return enemy_data.size()
