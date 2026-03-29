@@ -1,534 +1,352 @@
 extends Node2D
-
-# ─────────────────────────────────────────
-# WORLD — Ashveld Flats Terrain System
-# Canonical Reference: Entropy Addict Master Bible v3
-# ─────────────────────────────────────────
+class_name WorldMap
 
 const TILE_SIZE: int = 32
 const MAP_WIDTH: int = 40
 const MAP_HEIGHT: int = 40
-const ENEMY_COUNT: int = 15
+const ENEMY_COUNT: int = 12
 
-# Detection ranges (in tiles)
 const RANGE_WARNING: float   = 10.0
 const RANGE_VISIBLE: float   = 7.0
 const RANGE_ENCOUNTER: float = 2.0
 
-# Terrain types for Ashveld Flats (savannah/plains logic)
-enum Terrain { 
-	GRASS,
-	DRY_GRASS,
-	DIRT,
-	BOULDER,
-	SAND,
-	WATER_POOL
-}
-
-const TERRAIN_COLORS: Dictionary = {
-	Terrain.GRASS:      Color(0.52, 0.68, 0.28),
-	Terrain.DRY_GRASS:  Color(0.68, 0.62, 0.32),
-	Terrain.DIRT:       Color(0.55, 0.42, 0.28),
-	Terrain.BOULDER:    Color(0.42, 0.38, 0.35),
-	Terrain.SAND:       Color(0.76, 0.70, 0.52),
-	Terrain.WATER_POOL: Color(0.25, 0.42, 0.48),
-}
-
-# Fog of war
-const FOG_COLOR: Color = Color(0.05, 0.05, 0.07)
-
-# Map state
-var terrain_map: Dictionary = {}
-var enemy_data: Array = []
-var explored_tiles: Dictionary = {}
-var visible_tiles: Dictionary  = {}
+var tile_map: Dictionary = {}
+var enemies: Array = []
 var _player_grid: Vector2 = Vector2(-999, -999)
 
-const SIGHT_RADIUS: int = 5
+var daynight_overlay: ColorRect
+var creature_node: Node2D
 
-# UI references
-var level_label: Label
-var xp_notification: Label
-var terrain_info: Label
-var encounter_log: Label
+enum Tile { GRASS, DIRT, WALL, WATER, STONE, SAND }
 
-# Alpha/Subdue tracking
-var active_subdue_target: Dictionary = {}
+const BASE_COLORS: Dictionary = {
+	Tile.GRASS: Color(0.20, 0.54, 0.20),
+	Tile.DIRT:  Color(0.60, 0.44, 0.26),
+	Tile.WALL:  Color(0.24, 0.24, 0.26),
+	Tile.WATER: Color(0.18, 0.34, 0.58),
+	Tile.STONE: Color(0.38, 0.38, 0.40),
+	Tile.SAND:  Color(0.72, 0.64, 0.42),
+}
+const SHADOW_COLORS: Dictionary = {
+	Tile.GRASS: Color(0.10, 0.32, 0.10),
+	Tile.DIRT:  Color(0.38, 0.26, 0.14),
+	Tile.WALL:  Color(0.10, 0.10, 0.12),
+	Tile.WATER: Color(0.08, 0.18, 0.34),
+	Tile.STONE: Color(0.20, 0.20, 0.22),
+	Tile.SAND:  Color(0.48, 0.42, 0.26),
+}
+const HIGHLIGHT_COLORS: Dictionary = {
+	Tile.GRASS: Color(0.36, 0.72, 0.36),
+	Tile.DIRT:  Color(0.76, 0.60, 0.40),
+	Tile.WALL:  Color(0.38, 0.38, 0.42),
+	Tile.WATER: Color(0.40, 0.58, 0.82),
+	Tile.STONE: Color(0.56, 0.56, 0.60),
+	Tile.SAND:  Color(0.88, 0.82, 0.60),
+}
+
+const LONE_WANDERER_NAMES: Dictionary = {
+	"neutral": ["Road-Worn Traveler","Former Ironwind Outrider","Salt Marsh Drifter",
+				"Sunfall Vagrant","Displaced Farmer","Steppe Exile"],
+	"hostile": ["Route Hijacker","Barrens Raider","Flats Scavenger",
+				"Succession War Remnant","Iron Pass Fugitive","Ashborn Deserter"]
+}
 
 func _ready() -> void:
-	_generate_ashveld_terrain()
-	await _spawn_enemies()  # FIXED: Added await
-	_setup_ui()
-	
-	GameData.total_map_tiles = terrain_map.size()
-	print("🗺 Total map tiles: %d" % GameData.total_map_tiles)
-	
-	var spawn := GameData.get_spawn_position()
-	_reveal_around(spawn)
-	_update_level_display()
+	_generate_map()
+	_smooth_map()
+	_carve_paths()
+	_spawn_enemies()
+	_build_daynight_overlay()
+	_spawn_creatures()
 	queue_redraw()
 
-# ─────────────────────────────────────────
-# UI SETUP
-# ─────────────────────────────────────────
-func _setup_ui() -> void:
-	level_label = Label.new()
-	level_label.add_theme_font_size_override("font_size", 18)
-	level_label.modulate = Color(0.9, 0.7, 0.3)
-	level_label.position = Vector2(16, 16)
-	add_child(level_label)
-	
-	terrain_info = Label.new()
-	terrain_info.add_theme_font_size_override("font_size", 12)
-	terrain_info.modulate = Color(0.7, 0.7, 0.7)
-	terrain_info.position = Vector2(16, 40)
-	add_child(terrain_info)
-	
-	xp_notification = Label.new()
-	xp_notification.add_theme_font_size_override("font_size", 24)
-	xp_notification.modulate = Color(1, 0.9, 0.3)
-	xp_notification.visible = false
-	xp_notification.position = Vector2(400, 100)
-	add_child(xp_notification)
-	
-	encounter_log = Label.new()
-	encounter_log.add_theme_font_size_override("font_size", 14)
-	encounter_log.modulate = Color(0.6, 0.7, 0.9)
-	encounter_log.position = Vector2(16, 60)
-	encounter_log.custom_minimum_size = Vector2(300, 40)
-	encounter_log.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(encounter_log)
-
-func _update_level_display() -> void:
-	if level_label:
-		level_label.text = "★ Lv.%d | %d/%d XP" % [
-			GameData.player_level,
-			GameData.player_xp,
-			GameData.xp_to_next_level
-		]
-
-func _update_terrain_info(grid_pos: Vector2) -> void:
-	if terrain_info and terrain_map.has(grid_pos):
-		var terrain = terrain_map[grid_pos]
-		var names = {
-			Terrain.GRASS: "Grassland",
-			Terrain.DRY_GRASS: "Dry Grass",
-			Terrain.DIRT: "Bare Earth",
-			Terrain.BOULDER: "Boulder Field",
-			Terrain.SAND: "Sandy Patch",
-			Terrain.WATER_POOL: "Water Hole"
-		}
-		terrain_info.text = names.get(terrain, "Unknown")
-
-func _show_xp_notification(amount: int, reason: String = "") -> void:
-	if xp_notification:
-		xp_notification.text = "+%d XP %s" % [amount, reason]
-		xp_notification.position = Vector2(400, 100)
-		xp_notification.visible = true
-		xp_notification.modulate.a = 1.0
-		
-		var tween = create_tween()
-		tween.tween_property(xp_notification, "position:y", 60, 0.5).set_ease(Tween.EASE_OUT)
-		tween.parallel().tween_property(xp_notification, "modulate:a", 0, 0.5)
-		tween.tween_callback(func(): xp_notification.visible = false)
-
-func _show_exploration_notification(tiles: int) -> void:
-	var percentage = GameData.get_exploration_display()
-	var message = "🌍 +%d tiles explored (%s)" % [tiles, percentage]
-	
-	var notif := Label.new()
-	notif.text = message
-	notif.add_theme_font_size_override("font_size", 16)
-	notif.modulate = Color(0.4, 0.8, 0.9)
-	notif.position = Vector2(400, 300)
-	add_child(notif)
-	
-	var tween = create_tween()
-	tween.tween_property(notif, "position:y", 250, 0.5).set_ease(Tween.EASE_OUT)
-	tween.parallel().tween_property(notif, "modulate:a", 0, 0.5)
-	tween.tween_callback(notif.queue_free)
-	
-	var milestone = int(GameData.exploration_percentage / 10.0)
-	if milestone > 0 and milestone * 10 == int(GameData.exploration_percentage):
-		_show_milestone_notification(milestone * 10)
-
-func _show_milestone_notification(percentage: int) -> void:
-	var notif := Label.new()
-	notif.text = "🎯 MILESTONE: %d%% Explored!\n+Familiar Environment Bonus" % percentage
-	notif.add_theme_font_size_override("font_size", 24)
-	notif.modulate = Color(1, 0.9, 0.3)
-	notif.position = Vector2(350, 280)
-	notif.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(notif)
-	
-	var tween = create_tween()
-	tween.tween_property(notif, "position:y", 220, 0.6).set_ease(Tween.EASE_OUT)
-	tween.parallel().tween_property(notif, "scale", Vector2(1.1, 1.1), 0.3)
-	tween.tween_property(notif, "scale", Vector2(1, 1), 0.3)
-	tween.parallel().tween_property(notif, "modulate:a", 0, 0.6)
-	tween.tween_callback(notif.queue_free)
-
-# ─────────────────────────────────────────
-# TERRAIN GENERATION
-# ─────────────────────────────────────────
-func _generate_ashveld_terrain() -> void:
-	var spawn := GameData.get_spawn_position()
-	
+func _generate_map() -> void:
+	# FIX: Explicit type annotation
+	var bias: String = GameData.get_tile_bias()
 	for x in range(MAP_WIDTH):
 		for y in range(MAP_HEIGHT):
-			var pos := Vector2(x, y)
-			var dist_from_spawn = pos.distance_to(spawn)
-			
-			var roll := randf()
-			
-			if dist_from_spawn < 5:
-				if roll < 0.85:
-					terrain_map[pos] = Terrain.GRASS
-				else:
-					terrain_map[pos] = Terrain.DRY_GRASS
+			if x == 0 or y == 0 or x == MAP_WIDTH-1 or y == MAP_HEIGHT-1:
+				tile_map[Vector2i(x,y)] = Tile.WALL
 				continue
-			
-			if roll < 0.65:
-				terrain_map[pos] = Terrain.GRASS
-			elif roll < 0.80:
-				terrain_map[pos] = Terrain.DRY_GRASS
-			elif roll < 0.90:
-				terrain_map[pos] = Terrain.DIRT
-			elif roll < 0.96:
-				terrain_map[pos] = Terrain.BOULDER
-			elif roll < 0.99:
-				terrain_map[pos] = Terrain.SAND
-			else:
-				terrain_map[pos] = Terrain.WATER_POOL
+			tile_map[Vector2i(x,y)] = _tile_for_bias(bias)
+
+func _tile_for_bias(bias: String) -> Tile:
+	var r := randf()
+	if bias == "grass":
+		if r<0.72: return Tile.GRASS
+		elif r<0.88: return Tile.DIRT
+		elif r<0.94: return Tile.SAND
+		return Tile.WALL
+	elif bias == "stone" or bias == "rocky":
+		if r<0.28: return Tile.GRASS
+		elif r<0.44: return Tile.DIRT
+		elif r<0.72: return Tile.STONE
+		return Tile.WALL
+	elif bias == "forest":
+		if r<0.50: return Tile.GRASS
+		elif r<0.62: return Tile.DIRT
+		elif r<0.70: return Tile.STONE
+		return Tile.WALL
+	elif bias == "coastal":
+		if r<0.44: return Tile.GRASS
+		elif r<0.58: return Tile.SAND
+		elif r<0.68: return Tile.STONE
+		elif r<0.78: return Tile.WATER
+		return Tile.WALL
+	elif bias == "marsh":
+		if r<0.36: return Tile.GRASS
+		elif r<0.54: return Tile.DIRT
+		elif r<0.70: return Tile.WATER
+		elif r<0.80: return Tile.STONE
+		return Tile.WALL
+	elif bias == "barren":
+		if r<0.24: return Tile.GRASS
+		elif r<0.40: return Tile.DIRT
+		elif r<0.66: return Tile.STONE
+		return Tile.WALL
+	else:
+		if r<0.52: return Tile.GRASS
+		elif r<0.74: return Tile.DIRT
+		elif r<0.86: return Tile.STONE
+		return Tile.WALL
+
+func _smooth_map() -> void:
+	var copy := tile_map.duplicate()
+	for x in range(1, MAP_WIDTH-1):
+		for y in range(1, MAP_HEIGHT-1):
+			var walls := 0
+			for dx in range(-1,2):
+				for dy in range(-1,2):
+					if copy.get(Vector2i(x+dx,y+dy), Tile.WALL) == Tile.WALL:
+						walls += 1
+			if walls >= 6: tile_map[Vector2i(x,y)] = Tile.WALL
+			elif walls <= 2 and copy[Vector2i(x,y)] == Tile.WALL: tile_map[Vector2i(x,y)] = Tile.DIRT
+
+func _carve_paths() -> void:
+	var mx: int = int(MAP_WIDTH / 2.0)
+	var my: int = int(MAP_HEIGHT / 2.0)
 	
-	_create_boulder_clusters(8)
-	_create_dirt_paths(3)
-
-func _create_boulder_clusters(count: int) -> void:
-	for i in range(count):
-		var cluster_center = Vector2(
-			randi_range(8, MAP_WIDTH - 8),
-			randi_range(8, MAP_HEIGHT - 8)
-		)
-		
-		var cluster_size = randi_range(3, 7)
-		for j in range(cluster_size):
-			var offset = Vector2(
-				randi_range(-2, 2),
-				randi_range(-2, 2)
-			)
-			var boulder_pos = cluster_center + offset
-			if terrain_map.has(boulder_pos):
-				terrain_map[boulder_pos] = Terrain.BOULDER
-
-func _create_dirt_paths(count: int) -> void:
-	for i in range(count):
-		var start_x = 0 if randf() < 0.5 else MAP_WIDTH - 1
-		var start_y = randi_range(5, MAP_HEIGHT - 5)
-		var path_start = Vector2(start_x, start_y)
-		
-		var end_x = MAP_WIDTH - 1 if start_x == 0 else 0
-		var end_y = randi_range(5, MAP_HEIGHT - 5)
-		var path_end = Vector2(end_x, end_y)
-		
-		var steps = max(abs(end_x - start_x), abs(end_y - start_y))
-		for step in range(steps):
-			var t = float(step) / steps
-			var path_pos = path_start.lerp(path_end, t)
-			var grid_pos = Vector2(int(path_pos.x), int(path_pos.y))
+	for x in range(1, MAP_WIDTH-1):
+		var pos := Vector2i(x, my)
+		if tile_map.has(pos) and tile_map[pos] == Tile.WALL:
+			tile_map[pos] = Tile.DIRT
 			
-			if terrain_map.has(grid_pos) and terrain_map[grid_pos] != Terrain.BOULDER:
-				if randf() < 0.7:
-					terrain_map[grid_pos] = Terrain.DIRT
-				else:
-					terrain_map[grid_pos] = Terrain.DRY_GRASS
+	for y in range(1, MAP_HEIGHT-1):
+		var pos := Vector2i(mx, y)
+		if tile_map.has(pos) and tile_map[pos] == Tile.WALL:
+			tile_map[pos] = Tile.DIRT
+			
+	# Clear spawn zone
+	# FIX: Explicit type annotation
+	var sp: Vector2i = GameData.get_spawn_position()
+	for dx in range(-2,3):
+		for dy in range(-2,3):
+			var p := Vector2i(sp.x+dx, sp.y+dy)
+			if tile_map.has(p) and tile_map[p] in [Tile.WALL, Tile.WATER]:
+				tile_map[p] = Tile.DIRT
 
-# ─────────────────────────────────────────
-# ENEMY SPAWNING — FIXED with await
-# ─────────────────────────────────────────
 func _spawn_enemies() -> void:
-	var spawn := GameData.get_spawn_position()
+	# FIX: Explicit type annotation
+	var sp: Vector2i = GameData.get_spawn_position()
 	var placed := 0
 	var attempts := 0
-	
-	var enemy_names = [
-		"Lone Wanderer", "Ash-Born Scout", "Flats Drifter", "Route Survivor",
-		"Border Watcher", "Salt Marsh Runner", "Steppe Straggler", "Iron Pass Exile"
-	]
-	
-	while placed < ENEMY_COUNT and attempts < 1000:
+	while placed < ENEMY_COUNT and attempts < 600:
 		attempts += 1
-		var x := randi_range(1, MAP_WIDTH - 2)
-		var y := randi_range(1, MAP_HEIGHT - 2)
-		var pos := Vector2(x, y)
+		var x := randi_range(2, MAP_WIDTH-3)
+		var y := randi_range(2, MAP_HEIGHT-3)
+		var pos := Vector2i(x,y)
+		if tile_map.get(pos, Tile.WALL) in [Tile.WALL, Tile.WATER]: continue
+		if pos.distance_to(sp) < 5.0: continue
+		if _enemy_at(pos): continue
 		
-		if is_walkable(pos) \
-		and terrain_map.get(pos) != Terrain.BOULDER \
-		and terrain_map.get(pos) != Terrain.WATER_POOL \
-		and pos.distance_to(spawn) > 6.0 \
-		and not _enemy_at_position(pos):
-			
-			var enemy_name = enemy_names[randi_range(0, enemy_names.size() - 1)]  # FIXED: renamed from "name"
-			var generated_call = await GameData.generate_call("Lone Wanderer", 1.0)  # FIXED: added await + renamed from "call"
-			var enemy_type = "Unknown affiliation — unknown intent"
-			var hp = randi_range(70, 90)
-			var real_name = GameData.get_or_generate_enemy_name(pos)  # FIXED: Generate real name
-			
-			enemy_data.append({
-				"pos": pos,
-				"enemy_name": enemy_name,  # Generic: "Lone Wanderer"
-				"real_name": real_name,     # Real name: "Ghiar"
-				"generated_call": generated_call,
-				"enemy_type": enemy_type,
-				"hp": hp,
-				"max_hp": 80,
-				"alpha_type": _determine_alpha_type(),
-				"name_revealed": false  # Track if name has been revealed
-			})
-			
-			placed += 1
+		var faction := "hostile" if randf() < 0.60 else "neutral"
+		var type_pool: Array = LONE_WANDERER_NAMES[faction]
+		var enemy_level := randi_range(1, GameData.player_level + 2)
+		enemies.append({
+			"pos": pos,
+			"faction": faction,
+			"hp": 40 + enemy_level * 8,
+			"max_hp": 40 + enemy_level * 8,
+			"level": enemy_level,
+			"name": type_pool[randi() % type_pool.size()],
+			"subdued": false,
+			"type": "lone_wanderer",
+			"is_alpha": false,
+		})
+		placed += 1
 
-func _enemy_at_position(pos: Vector2) -> bool:
-	for enemy in enemy_data:
-		if enemy.pos == pos:
-			return true
+func _enemy_at(pos: Vector2i) -> bool:
+	for e in enemies:
+		if e["pos"] == pos: return true
 	return false
 
-func _determine_alpha_type() -> String:
-	var roll = randf()
-	if roll < 0.4:
-		return "Risen"
-	elif roll < 0.7:
-		return "Remnant"
-	elif roll < 0.9:
-		return "Lone"
-	else:
-		return "Delegated"
+func _spawn_creatures() -> void:
+	var ca := load("res://creature_animator.gd")
+	if ca == null: return
+	creature_node = Node2D.new()
+	creature_node.set_script(ca)
+	add_child(creature_node)
 
-# ─────────────────────────────────────────
-# FOG OF WAR
-# ─────────────────────────────────────────
-func _reveal_around(center: Vector2) -> void:
-	visible_tiles.clear()
-	var new_tiles_explored := 0
-	
-	for dx in range(-SIGHT_RADIUS, SIGHT_RADIUS + 1):
-		for dy in range(-SIGHT_RADIUS, SIGHT_RADIUS + 1):
-			var tile := Vector2(center.x + dx, center.y + dy)
-			if terrain_map.has(tile):
-				if Vector2(dx, dy).length() <= SIGHT_RADIUS:
-					if not explored_tiles.has(tile):
-						explored_tiles[tile] = true
-						new_tiles_explored += 1
-					
-					visible_tiles[tile] = true
-	
-	if new_tiles_explored > 0:
-		for i in range(new_tiles_explored):
-			GameData.add_explored_tile()
-		
-		_show_exploration_notification(new_tiles_explored)
+func _build_daynight_overlay() -> void:
+	var cl := CanvasLayer.new()
+	cl.layer = 2
+	add_child(cl)
+	daynight_overlay = ColorRect.new()
+	daynight_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	daynight_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	daynight_overlay.color = Color(0,0,0,0)
+	cl.add_child(daynight_overlay)
 
-# ─────────────────────────────────────────
-# DRAW
-# ─────────────────────────────────────────
-func _draw() -> void:
-	for grid_pos in terrain_map:
-		var world_pos: Vector2 = grid_pos * TILE_SIZE
-		var rect := Rect2(world_pos, Vector2(TILE_SIZE, TILE_SIZE))
-
-		if not explored_tiles.has(grid_pos):
-			draw_rect(rect, FOG_COLOR)
-		elif not visible_tiles.has(grid_pos):
-			var base: Color = TERRAIN_COLORS[terrain_map[grid_pos]]
-			var dimmed := Color(base.r * 0.45, base.g * 0.45, base.b * 0.45)
-			draw_rect(rect, dimmed)
-		else:
-			draw_rect(rect, TERRAIN_COLORS[terrain_map[grid_pos]])
-			
-			var terrain = terrain_map[grid_pos]
-			if terrain == Terrain.BOULDER:
-				draw_circle(world_pos + Vector2(16, 16), 10, Color(0.35, 0.32, 0.30))
-				draw_circle(world_pos + Vector2(14, 14), 4, Color(0.48, 0.45, 0.42))
-				draw_rect(Rect2(world_pos + Vector2(20, 22), Vector2(8, 3)), Color(0, 0, 0, 0.2))
-			elif terrain == Terrain.WATER_POOL:
-				draw_circle(world_pos + Vector2(16, 16), 12, Color(0.30, 0.48, 0.55, 0.6))
-				draw_circle(world_pos + Vector2(14, 14), 3, Color(0.6, 0.8, 1, 0.4))
-			elif terrain == Terrain.DIRT:
-				if hash(grid_pos) % 3 == 0:
-					draw_rect(Rect2(world_pos + Vector2(8, 10), Vector2(3, 3)), Color(0.45, 0.38, 0.30))
-				if hash(grid_pos) % 5 == 0:
-					draw_rect(Rect2(world_pos + Vector2(20, 18), Vector2(2, 2)), Color(0.45, 0.38, 0.30))
-			elif terrain == Terrain.DRY_GRASS:
-				if hash(grid_pos) % 4 == 0:
-					draw_line(world_pos + Vector2(10, 24), world_pos + Vector2(10, 20), Color(0.5, 0.4, 0.2), 2)
-				if hash(grid_pos) % 4 == 1:
-					draw_line(world_pos + Vector2(22, 24), world_pos + Vector2(22, 19), Color(0.5, 0.4, 0.2), 2)
-
-	for enemy in enemy_data:
-		if not visible_tiles.has(enemy.pos):
-			continue
-		
-		var dist: float = _player_grid.distance_to(enemy.pos)
-		var world_pos: Vector2 = enemy.pos * TILE_SIZE
-
-		if dist <= RANGE_ENCOUNTER:
-			draw_rect(Rect2(world_pos + Vector2(4, 4), Vector2(24, 24)), Color(1.0, 0.15, 0.15))
-			draw_string(
-				ThemeDB.fallback_font,
-				world_pos + Vector2(10, -2),
-				"!",
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1, 20,
-				Color(1.0, 0.95, 0.0)
-			)
-			if encounter_log:
-				# FIXED: Use the correct key names
-				encounter_log.text = "⚔ %s — '%s'" % [enemy.get("enemy_name", "Lone Wanderer"), enemy.get("generated_call", "Unknown")]
-		else:
-			draw_rect(Rect2(world_pos + Vector2(4, 4), Vector2(24, 24)), Color(0.9, 0.15, 0.15))
-			
-			var alpha_color = Color(0.7, 0.5, 0.3) if enemy.alpha_type == "Risen" else Color(0.5, 0.5, 0.7)
-			draw_rect(Rect2(world_pos + Vector2(2, 2), Vector2(4, 4)), alpha_color)
-
-# ─────────────────────────────────────────
-# PUBLIC API
-# ─────────────────────────────────────────
-func update_enemy_visibility(player_grid: Vector2) -> void:
-	_player_grid = player_grid
-	_reveal_around(player_grid)
-	_update_level_display()
-	_update_terrain_info(player_grid)
+func _process(delta: float) -> void:
+	GameData.advance_time(delta)
+	# FIX: Explicit type annotations
+	var b: float = GameData.get_ambient_brightness()
+	var sky: Color = GameData.get_sky_color()
+	if is_instance_valid(daynight_overlay):
+		daynight_overlay.color = Color(sky.r*0.35, sky.g*0.25, sky.b*0.45, (1.0-b)*0.78)
+	if is_instance_valid(creature_node):
+		creature_node.update_visibility(_player_grid)
 	queue_redraw()
 
-func get_terrain_at(grid_pos: Vector2) -> Terrain:
-	return terrain_map.get(grid_pos, Terrain.GRASS)
+func _draw() -> void:
+	# FIX: Explicit type annotation
+	var b: float = GameData.get_ambient_brightness()
+	_draw_tiles(b)
+	_draw_explored_overlay()
+	_draw_enemy_shadows()
+	_draw_enemies(b)
+
+func _draw_tiles(b: float) -> void:
+	for gp in tile_map:
+		var tt: Tile = tile_map[gp]
+		var wp: Vector2 = gp * TILE_SIZE
+		var base: Color = BASE_COLORS[tt] * b
+		draw_rect(Rect2(wp, Vector2(TILE_SIZE, TILE_SIZE)), base)
+		if tt == Tile.WALL or tt == Tile.STONE:
+			draw_rect(Rect2(wp, Vector2(TILE_SIZE, 3)), HIGHLIGHT_COLORS[tt]*b)
+			draw_rect(Rect2(wp, Vector2(3, TILE_SIZE)), HIGHLIGHT_COLORS[tt]*b)
+			draw_rect(Rect2(wp+Vector2(0,TILE_SIZE-3), Vector2(TILE_SIZE,3)), SHADOW_COLORS[tt]*b)
+			draw_rect(Rect2(wp+Vector2(TILE_SIZE-3,0), Vector2(3,TILE_SIZE)), SHADOW_COLORS[tt]*b)
+		elif tt == Tile.WATER:
+			var t_ms := Time.get_ticks_msec() * 0.001
+			var sh := 0.16 + 0.07 * sin(t_ms + gp.x*0.3)
+			draw_rect(Rect2(wp+Vector2(4,6),  Vector2(TILE_SIZE-8,2)), Color(0.5,0.75,1.0,sh))
+			draw_rect(Rect2(wp+Vector2(8,14), Vector2(TILE_SIZE-12,2)), Color(0.5,0.75,1.0,sh*0.6))
+			draw_rect(Rect2(wp+Vector2(3,22), Vector2(TILE_SIZE-6,2)), Color(0.5,0.75,1.0,sh*0.35))
+		elif tt == Tile.GRASS:
+			if (int(gp.x)*7+int(gp.y)*13)%5 == 0:
+				draw_rect(Rect2(wp+Vector2(6,8), Vector2(8,8)), SHADOW_COLORS[tt]*b*0.7)
+
+func _draw_explored_overlay() -> void:
+	for gp in tile_map:
+		if not GameData.explored_tiles.has(gp) and _player_grid.distance_to(gp) > RANGE_VISIBLE + 1:
+			draw_rect(Rect2(gp*TILE_SIZE, Vector2(TILE_SIZE,TILE_SIZE)), Color(0,0,0,0.55))
+
+func _draw_enemy_shadows() -> void:
+	for e in enemies:
+		if _player_grid.distance_to(e["pos"]) > RANGE_VISIBLE: continue
+		if e["subdued"]: continue
+		var wp: Vector2 = e["pos"] * TILE_SIZE
+		var pts := PackedVector2Array()
+		for i in range(12):
+			var a := i * TAU / 12
+			pts.append(wp + Vector2(18, 22) + Vector2(cos(a)*11, sin(a)*5))
+		draw_colored_polygon(pts, Color(0,0,0,0.35))
+
+func _draw_enemies(b: float) -> void:
+	for e in enemies:
+		var dist: float = _player_grid.distance_to(e["pos"])
+		if dist > RANGE_VISIBLE: continue
+		if e["subdued"]: continue
+		var wp: Vector2 = e["pos"] * TILE_SIZE
+		var t_ms := Time.get_ticks_msec() * 0.001
+		var bob := sin(t_ms * 2.0 + e["pos"].x) * 1.2
+
+		var body_col: Color
+		var top_col: Color
+		if e["faction"] == "hostile":
+			body_col = Color(0.80, 0.14, 0.14) * b
+			top_col  = Color(1.0, 0.45, 0.45) * b
+		else:
+			body_col = Color(0.24, 0.60, 0.74) * b
+			top_col  = Color(0.55, 0.82, 0.92) * b
+
+		draw_rect(Rect2(wp+Vector2(5,5+bob), Vector2(22,22)), body_col)
+		draw_rect(Rect2(wp+Vector2(5,5+bob), Vector2(22,3)), top_col)
+		draw_rect(Rect2(wp+Vector2(5,5+bob), Vector2(3,22)), top_col)
+		draw_rect(Rect2(wp+Vector2(5,24+bob), Vector2(22,3)), body_col*Color(0.5,0.5,0.5,1))
+		draw_rect(Rect2(wp+Vector2(24,5+bob), Vector2(3,22)), body_col*Color(0.5,0.5,0.5,1))
+		
+		for lv in range(min(e["level"], 5)):
+			draw_rect(Rect2(wp+Vector2(7+lv*4, 8+bob), Vector2(2,2)), Color(1,1,1,0.7))
+			
+		if dist <= RANGE_ENCOUNTER:
+			draw_rect(Rect2(wp+Vector2(2,-24), Vector2(TILE_SIZE-4,20)), Color(0.95,0.88,0.10,0.88))
+			draw_string(ThemeDB.fallback_font, wp+Vector2(13,-7), "!", HORIZONTAL_ALIGNMENT_LEFT,-1,17,Color(0.08,0.08,0.08))
+		elif dist <= RANGE_WARNING and dist > RANGE_VISIBLE - 0.5:
+			var pulse := 0.28 + 0.18*sin(t_ms*4.0)
+			draw_rect(Rect2(wp+Vector2(2,2), Vector2(TILE_SIZE-4,TILE_SIZE-4)), Color(1.0,0.6,0.1,pulse), false, 1.5)
+			
+		if e["faction"] == "neutral":
+			draw_string(ThemeDB.fallback_font, wp+Vector2(4,2+bob), "?", HORIZONTAL_ALIGNMENT_LEFT,-1,12, Color(0.8,1.0,0.4))
+
+func update_enemy_visibility(player_grid: Vector2) -> void:
+	_player_grid = player_grid
+	for dx in range(-int(RANGE_VISIBLE)-1, int(RANGE_VISIBLE)+2):
+		for dy in range(-int(RANGE_VISIBLE)-1, int(RANGE_VISIBLE)+2):
+			var gp := player_grid + Vector2(dx, dy)
+			if gp.distance_to(player_grid) <= RANGE_VISIBLE:
+				GameData.mark_explored(gp)
+	queue_redraw()
 
 func get_detection_level(player_grid: Vector2) -> String:
 	var closest := INF
-	for enemy in enemy_data:
-		var d: float = player_grid.distance_to(enemy.pos)
+	var closest_faction := "hostile"
+	for e in enemies:
+		if e["subdued"]: continue
+		var d: float = player_grid.distance_to(e["pos"])
 		if d < closest:
 			closest = d
-	
-	var familiar_bonus = GameData.familiar_environment_bonus / 100.0
-	if closest <= RANGE_VISIBLE and randf() < familiar_bonus:
+			closest_faction = e["faction"]
+	if GameData.party_stage == "nomad_party" and closest_faction == "neutral":
 		return "safe"
-	
-	if closest <= RANGE_ENCOUNTER:
-		return "encounter"
-	elif closest <= RANGE_VISIBLE:
-		return "visible"
-	elif closest <= RANGE_WARNING:
-		return "warning"
+	if closest <= RANGE_ENCOUNTER: return "encounter"
+	elif closest <= RANGE_VISIBLE:  return "visible"
+	elif closest <= RANGE_WARNING:  return "warning"
 	return "safe"
 
 func get_closest_enemy_distance(player_grid: Vector2) -> float:
 	var closest := INF
-	for enemy in enemy_data:
-		var d: float = player_grid.distance_to(enemy.pos)
-		if d < closest:
-			closest = d
+	for e in enemies:
+		if e["subdued"]: continue
+		var d: float = player_grid.distance_to(e["pos"])
+		if d < closest: closest = d
 	return closest
 
+func get_encounter_data(player_grid: Vector2) -> Dictionary:
+	for e in enemies:
+		if e["subdued"]: continue
+		if player_grid.distance_to(e["pos"]) <= RANGE_ENCOUNTER:
+			return e
+	return {}
+
 func check_encounter(player_grid_pos: Vector2) -> bool:
-	for i in range(enemy_data.size()):
-		var enemy = enemy_data[i]
-		if player_grid_pos.distance_to(enemy.pos) <= RANGE_ENCOUNTER:
-			active_subdue_target = {
-				"index": i,
-				"name": enemy.get("enemy_name", "Lone Wanderer"),
-				"real_name": enemy.get("real_name", "Unknown"),
-				"call": enemy.get("generated_call", "Unknown"),
-				"type": enemy.get("enemy_type", "Unknown affiliation"),
-				"hp": enemy.hp,
-				"max_hp": enemy.max_hp,
-				"alpha_type": enemy.alpha_type
-			}
-			
-			enemy_data.remove_at(i)
-			GameData.clear_enemy_name(enemy.pos)
-			queue_redraw()
-			return true
-	return false
+	var ed := get_encounter_data(player_grid_pos)
+	if ed.is_empty(): return false
+	GameData.encounter_enemy = ed
+	return true
+
+func resolve_encounter(enemy_data: Dictionary, outcome: String) -> void:
+	for i in range(enemies.size()):
+		if enemies[i]["pos"] == enemy_data["pos"]:
+			match outcome:
+				"defeated": enemies.remove_at(i)
+				"subdued": enemies[i]["subdued"] = true
+				"fled": pass
+			break
+	queue_redraw()
 
 func is_walkable(grid_pos: Vector2) -> bool:
-	if not terrain_map.has(grid_pos):
-		return false
-	var terrain = terrain_map[grid_pos]
-	return terrain != Terrain.BOULDER and terrain != Terrain.WATER_POOL
-
-# ─────────────────────────────────────────
-# SUBDUE SYSTEM
-# ─────────────────────────────────────────
-func get_active_subdue_target() -> Dictionary:
-	return active_subdue_target
-
-func finalize_subdue(success: bool) -> void:
-	if success and active_subdue_target:
-		print("✅ %s subdued and stored" % active_subdue_target.name)
-	elif active_subdue_target:
-		print("❌ %s escaped" % active_subdue_target.name)
-	
-	active_subdue_target.clear()
-
-# ─────────────────────────────────────────
-# ALPHA SYSTEM
-# ─────────────────────────────────────────
-func get_alpha_summary() -> Dictionary:
-	var summary = {
-		"risen": 0,
-		"delegated": 0,
-		"remnant": 0,
-		"lone": 0,
-		"inherited": 0
-	}
-	
-	for enemy in enemy_data:
-		if visible_tiles.has(enemy.pos):
-			var alpha = enemy.get("alpha_type", "Risen")
-			if alpha in summary:
-				summary[alpha.to_lower()] += 1
-	
-	return summary
-
-# ─────────────────────────────────────────
-# LEVEL-UP EFFECTS
-# ─────────────────────────────────────────
-func check_for_level_up() -> void:
-	if GameData.player_level > 1:
-		_show_level_up_world_effect()
-
-func _show_level_up_world_effect() -> void:
-	var flash := ColorRect.new()
-	flash.color = Color(1, 0.9, 0.3, 0.2)
-	flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(flash)
-	
-	var tween = create_tween()
-	tween.tween_property(flash, "modulate:a", 0, 0.4)
-	tween.tween_callback(flash.queue_free)
-
-# ─────────────────────────────────────────
-# SAVE/LOAD SUPPORT
-# ─────────────────────────────────────────
-func get_save_data() -> Dictionary:
-	return {
-		"terrain": terrain_map,
-		"enemies": enemy_data,
-		"explored": explored_tiles.keys(),
-		"player_grid": _player_grid
-	}
-
-func load_save_data(save_data: Dictionary) -> void:
-	if save_data.has("terrain"):
-		terrain_map = save_data.terrain
-	if save_data.has("enemies"):
-		enemy_data = save_data.enemies
-	if save_data.has("explored"):
-		for pos in save_data.explored:
-			explored_tiles[pos] = true
-	if save_data.has("player_grid"):
-		_player_grid = save_data.player_grid
-	
-	queue_redraw()
+	var key := Vector2i(grid_pos)
+	if not tile_map.has(key): return false
+	return tile_map[key] not in [Tile.WALL, Tile.WATER]

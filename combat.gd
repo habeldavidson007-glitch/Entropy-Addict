@@ -1,548 +1,628 @@
 extends Control
+# ═══════════════════════════════════════════════════════════
+# COMBAT SCENE — Turn-based SRPG
+# ═══════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────
-# COMBAT SYSTEM — Party + Subdue + Calls
-# ─────────────────────────────────────────
-
-var player_hp: int = 100
-var enemy_hp: int = 80
-var player_max_hp: int = 100
-var enemy_max_hp: int = 80
+# ── Combat state ──
+var player_hp: int
+var player_max_hp: int
+var enemy_hp: int
+var enemy_max_hp: int
+# FIX: Corrected syntax (removed space in type declaration)
+var enemy_data: Dictionary = {}
 var player_turn: bool = true
 var combat_over: bool = false
-var defending: bool = false
+var defending: bool   = false
+var turn_count: int   = 0
+var phase: String     = "initiative"
 
-var enemy_call: String = ""
-var enemy_name: String = "Lone Wanderer"
-var enemy_real_name: String = ""
-var enemy_type: String = "Unknown affiliation — unknown intent"
-var enemy_id: String = ""
-
-var active_party_members: Array = []
-var party_member_hp: Dictionary = {}
-
-# UI Elements
-var player_panel: ColorRect
-var enemy_panel: ColorRect
+# ── UI nodes ──
 var player_hp_bar: ProgressBar
 var enemy_hp_bar: ProgressBar
 var player_hp_label: Label
 var enemy_hp_label: Label
-var log_label: Label
-var action_container: HBoxContainer
+var initiative_label: Label
 var roll_btn: Button
-var subdue_btn: Button
-var party_hp_labels: Array = []
-var party_hp_bars: Array = []
+var action_container: HBoxContainer
+var log_container: VBoxContainer
+var recruit_panel: Control
+var codex_panel: Control
+var attr_panel: Control
+var enemy_name_label: Label
+var enemy_desc_label: Label
+var party_turn_label: Label
 
-var xp_reward: int = 50
-var enemy_damage_min: int = 6
-var enemy_damage_max: int = 15
+const ENEMY_POOL_NEUTRAL: Array = [
+	"Road-Worn Traveler","Former Ironwind Outrider","Salt Marsh Drifter",
+	"Sunfall Vagrant","Displaced Farmer","Steppe Exile"
+]
+const ENEMY_POOL_HOSTILE: Array = [
+	"Route Hijacker","Barrens Raider","Flats Scavenger",
+	"Succession War Remnant","Iron Pass Fugitive","Ashborn Deserter"
+]
 
 func _ready() -> void:
-	player_max_hp = GameData.get_max_hp()
-	player_hp = player_max_hp
+	player_hp     = GameData.player_hp
+	player_max_hp = GameData.player_max_hp
+	if not GameData.encounter_enemy.is_empty():
+		enemy_data = GameData.encounter_enemy
+	else:
+		_generate_random_enemy()
+	enemy_hp     = enemy_data.get("hp", 50)
+	enemy_max_hp = enemy_data.get("max_hp", 50)
+	_build_ui()
+	_load_enemy_desc_groq()
 
-	enemy_call = await GameData.generate_call(enemy_type, float(enemy_hp) / enemy_max_hp)
+func _generate_random_enemy() -> void:
+	var faction := "hostile" if randf() < 0.55 else "neutral"
+	var pool: Array = ENEMY_POOL_HOSTILE if faction == "hostile" else ENEMY_POOL_NEUTRAL
+	var lv := randi_range(1, GameData.player_level + 1)
+	enemy_data = {
+		"name": pool[randi() % pool.size()],
+		"faction": faction,
+		"level": lv,
+		"hp": 40 + lv * 8,
+		"max_hp": 40 + lv * 8,
+		"type": "lone_wanderer",
+	}
 
-	# Generate a real name with 50% chance
-	var possible_real_names = ["Maret", "Ossel", "Kaelen", "Vera", "Lyra", "Dain", "Ghiar", "Ryn", "Varek", "Senne"]
-	enemy_real_name = possible_real_names[randi_range(0, possible_real_names.size() - 1)] if randf() < 0.5 else ""
-
-	enemy_id = "enemy_%d_%d" % [Time.get_unix_time_from_system(), randi_range(0, 999)]
-	active_party_members = GameData.get_party_members()
-
-	for member in active_party_members:
-		var member_name = member.get("name", "Unknown")
-		party_member_hp[member_name] = member.get("hp", member.get("max_hp", 80))
-
-	_build_clean_ui()
-	_update_subdue_button()
-
-func _build_clean_ui() -> void:
+func _build_ui() -> void:
 	var bg := ColorRect.new()
-	bg.color = Color(0.05, 0.03, 0.08)
+	bg.color = Color(0.04, 0.02, 0.06)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
-	var title := Label.new()
-	title.text = "— ENCOUNTER —"
-	title.add_theme_font_size_override("font_size", 16)
-	title.modulate = Color(0.6, 0.5, 0.6)
-	title.position = Vector2(500, 20)
-	add_child(title)
+	for i in range(0, 1152, 48):
+		var l := ColorRect.new()
+		l.color = Color(1,1,1,0.01)
+		l.size = Vector2(1, 648)
+		l.position = Vector2(i, 0)
+		add_child(l)
 
-	var left_x = 30
-	var left_y = 70
-
-	# Party Panel
-	if active_party_members.size() > 0:
-		var party_panel := ColorRect.new()
-		party_panel.color = Color(0.1, 0.08, 0.12)
-		party_panel.size = Vector2(300, 50 + (active_party_members.size() * 40))
-		party_panel.position = Vector2(left_x, left_y)
-		add_child(party_panel)
-
-		var party_title := Label.new()
-		party_title.text = "★ PARTY (%d)" % active_party_members.size()
-		party_title.add_theme_font_size_override("font_size", 13)
-		party_title.modulate = Color(0.9, 0.7, 0.3)
-		party_title.position = Vector2(10, 10)
-		party_panel.add_child(party_title)
-
-		var offset_y = 35
-		for member in active_party_members:
-			var member_name = member.get("name", "Unknown")
-			var member_max = member.get("max_hp", 80)
-			var current = party_member_hp.get(member_name, member_max)
-
-			var name_lbl := Label.new()
-			name_lbl.text = "• " + member_name
-			name_lbl.add_theme_font_size_override("font_size", 11)
-			name_lbl.modulate = Color(0.9, 0.7, 0.5)
-			name_lbl.position = Vector2(10, offset_y)
-			party_panel.add_child(name_lbl)
-
-			var hp_lbl := Label.new()
-			hp_lbl.text = "HP: %d/%d" % [current, member_max]
-			hp_lbl.add_theme_font_size_override("font_size", 10)
-			hp_lbl.modulate = Color(0.7, 0.9, 0.7)
-			hp_lbl.position = Vector2(10, offset_y + 18)
-			party_panel.add_child(hp_lbl)
-			party_hp_labels.append(hp_lbl)
-
-			var hp_bar := ProgressBar.new()
-			hp_bar.max_value = member_max
-			hp_bar.value = current
-			hp_bar.size = Vector2(150, 12)
-			hp_bar.position = Vector2(140, offset_y + 20)
-			party_panel.add_child(hp_bar)
-			party_hp_bars.append(hp_bar)
-
-			offset_y += 40
+	var hdr := ColorRect.new()
+	hdr.color = Color(0.06, 0.04, 0.09)
+	hdr.size = Vector2(1152, 46)
+	add_child(hdr)
+	var faction_col: Color = Color(0.35,0.25,0.42) if enemy_data.get("faction","hostile")=="hostile" else Color(0.20,0.38,0.22)
+	var enc_lbl := Label.new()
+	enc_lbl.text = "— ENCOUNTER: %s —" % enemy_data.get("faction","hostile").to_upper()
+	enc_lbl.add_theme_font_size_override("font_size", 13)
+	enc_lbl.modulate = faction_col
+	enc_lbl.position = Vector2(440, 15)
+	add_child(enc_lbl)
 
 	# Player Panel
-	var party_offset_y = (60 + (active_party_members.size() * 40)) if active_party_members.size() > 0 else 0
-	player_panel = ColorRect.new()
-	player_panel.color = Color(0.12, 0.1, 0.15)
-	player_panel.size = Vector2(300, 180)
-	player_panel.position = Vector2(left_x, left_y + party_offset_y)
-	add_child(player_panel)
+	var pp := ColorRect.new()
+	pp.color = Color(0.07, 0.08, 0.12)
+	pp.size = Vector2(370, 220)
+	pp.position = Vector2(28, 54)
+	add_child(pp)
+	var ps := ColorRect.new()
+	ps.color = GameData.player_color
+	ps.size = Vector2(3, 220)
+	ps.position = Vector2(28, 54)
+	add_child(ps)
 
-	var player_name_lbl := Label.new()
-	player_name_lbl.text = GameData.player_emoticon + " " + GameData.player_name
-	player_name_lbl.add_theme_font_size_override("font_size", 20)
-	player_name_lbl.modulate = GameData.player_color
-	player_name_lbl.position = Vector2(15, 15)
-	player_panel.add_child(player_name_lbl)
+	var pn := Label.new()
+	pn.text = "%s  %s" % [GameData.player_emoticon, GameData.player_name]
+	pn.add_theme_font_size_override("font_size", 20)
+	pn.modulate = GameData.player_color
+	pn.position = Vector2(44, 64)
+	add_child(pn)
 
-	var level_lbl := Label.new()
-	level_lbl.text = "Level %d" % GameData.player_level
-	level_lbl.add_theme_font_size_override("font_size", 14)
-	level_lbl.modulate = Color(0.9, 0.7, 0.3)
-	level_lbl.position = Vector2(15, 42)
-	player_panel.add_child(level_lbl)
+	var pl := Label.new()
+	pl.text = "Lv.%d  ·  STR%d  INT%d  DEX%d  LCK%d" % [
+		GameData.player_level, GameData.attr_str, GameData.attr_int, GameData.attr_dex, GameData.attr_luck]
+	pl.add_theme_font_size_override("font_size", 11)
+	pl.modulate = Color(0.40,0.40,0.40)
+	pl.position = Vector2(44, 90)
+	add_child(pl)
+
+	if GameData.first_habit_name != "":
+		var hl := Label.new()
+		hl.text = "[ %s · %s ]" % [GameData.first_habit_name, GameData.get_habit_stage(GameData.first_habit_name)]
+		hl.add_theme_font_size_override("font_size", 10)
+		hl.modulate = Color(0.44,0.66,0.44)
+		hl.position = Vector2(44, 107)
+		add_child(hl)
+
+	var tf_lbl := Label.new()
+	tf_lbl.text = "Terrain %.1f  ·  Dodge +%.0f%%  ·  Flee %.0f%%" % [
+		GameData.terrain_familiarity, GameData.get_dodge_bonus()*100, GameData.get_flee_chance()*100]
+	tf_lbl.add_theme_font_size_override("font_size", 10)
+	tf_lbl.modulate = Color(0.40,0.56,0.40)
+	tf_lbl.position = Vector2(44, 122)
+	add_child(tf_lbl)
 
 	player_hp_bar = ProgressBar.new()
 	player_hp_bar.max_value = player_max_hp
-	player_hp_bar.value = player_hp
-	player_hp_bar.size = Vector2(270, 22)
-	player_hp_bar.position = Vector2(15, 65)
-	player_panel.add_child(player_hp_bar)
+	player_hp_bar.value     = player_hp
+	player_hp_bar.size      = Vector2(326, 16)
+	player_hp_bar.position  = Vector2(44, 178)
+	add_child(player_hp_bar)
 
 	player_hp_label = Label.new()
-	player_hp_label.text = "HP: %d / %d" % [player_hp, player_max_hp]
-	player_hp_label.add_theme_font_size_override("font_size", 12)
-	player_hp_label.modulate = Color(0.7, 0.9, 0.7)
-	player_hp_label.position = Vector2(15, 92)
-	player_panel.add_child(player_hp_label)
-
-	var xp_bar_bg := ColorRect.new()
-	xp_bar_bg.color = Color(0.2, 0.2, 0.25)
-	xp_bar_bg.size = Vector2(270, 8)
-	xp_bar_bg.position = Vector2(15, 115)
-	player_panel.add_child(xp_bar_bg)
-
-	var xp_bar := ColorRect.new()
-	xp_bar.color = Color(0.3, 0.6, 0.9)
-	xp_bar.size = Vector2(270 * GameData.get_xp_progress(), 8)
-	xp_bar.position = Vector2(15, 115)
-	player_panel.add_child(xp_bar)
-
-	var xp_lbl := Label.new()
-	xp_lbl.text = "%d / %d XP" % [GameData.player_xp, GameData.xp_to_next_level]
-	xp_lbl.add_theme_font_size_override("font_size", 10)
-	xp_lbl.modulate = Color(0.6, 0.7, 0.8)
-	xp_lbl.position = Vector2(15, 130)
-	player_panel.add_child(xp_lbl)
+	player_hp_label.text = "HP  %d / %d" % [player_hp, player_max_hp]
+	player_hp_label.add_theme_font_size_override("font_size", 13)
+	player_hp_label.modulate = Color(0.60, 0.86, 0.60)
+	player_hp_label.position = Vector2(44, 202)
+	add_child(player_hp_label)
 
 	# Enemy Panel
-	enemy_panel = ColorRect.new()
-	enemy_panel.color = Color(0.15, 0.08, 0.08)
-	enemy_panel.size = Vector2(320, 200)
-	enemy_panel.position = Vector2(800, 70)
-	add_child(enemy_panel)
+	var ep := ColorRect.new()
+	ep.color = Color(0.10, 0.05, 0.08)
+	ep.size  = Vector2(370, 220)
+	ep.position = Vector2(754, 54)
+	add_child(ep)
+	var es_col: Color = Color(0.65,0.08,0.08) if enemy_data.get("faction","hostile")=="hostile" else Color(0.10,0.55,0.32)
+	var es := ColorRect.new()
+	es.color    = es_col
+	es.size     = Vector2(3, 220)
+	es.position = Vector2(1120, 54)
+	add_child(es)
 
-	var enemy_name_lbl := Label.new()
-	enemy_name_lbl.text = "◆ " + enemy_name
-	enemy_name_lbl.add_theme_font_size_override("font_size", 20)
-	enemy_name_lbl.modulate = Color(0.9, 0.4, 0.4)
-	enemy_name_lbl.position = Vector2(15, 15)
-	enemy_panel.add_child(enemy_name_lbl)
+	enemy_name_label = Label.new()
+	enemy_name_label.text = "◆  %s" % enemy_data.get("name","Lone Wanderer")
+	enemy_name_label.add_theme_font_size_override("font_size", 20)
+	enemy_name_label.modulate = es_col
+	enemy_name_label.position = Vector2(770, 64)
+	add_child(enemy_name_label)
 
-	var call_lbl := Label.new()
-	call_lbl.text = "'%s'" % enemy_call
-	call_lbl.add_theme_font_size_override("font_size", 12)
-	call_lbl.modulate = Color(0.7, 0.7, 0.9)
-	call_lbl.position = Vector2(15, 42)
-	enemy_panel.add_child(call_lbl)
+	var el := Label.new()
+	el.text = "Lv.%d  ·  %s" % [enemy_data.get("level",1), enemy_data.get("faction","hostile").capitalize()]
+	el.add_theme_font_size_override("font_size", 11)
+	el.modulate = Color(0.40,0.40,0.40)
+	el.position = Vector2(770, 90)
+	add_child(el)
 
-	var type_lbl := Label.new()
-	type_lbl.text = enemy_type
-	type_lbl.add_theme_font_size_override("font_size", 10)
-	type_lbl.modulate = Color(0.5, 0.5, 0.5)
-	type_lbl.position = Vector2(15, 62)
-	enemy_panel.add_child(type_lbl)
+	enemy_desc_label = Label.new()
+	enemy_desc_label.text = enemy_data.get("name","") + " — affiliation unclear."
+	enemy_desc_label.add_theme_font_size_override("font_size", 11)
+	enemy_desc_label.modulate = Color(0.38,0.38,0.38)
+	enemy_desc_label.position = Vector2(770, 107)
+	enemy_desc_label.custom_minimum_size = Vector2(340, 0)
+	enemy_desc_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(enemy_desc_label)
 
 	enemy_hp_bar = ProgressBar.new()
 	enemy_hp_bar.max_value = enemy_max_hp
-	enemy_hp_bar.value = enemy_hp
-	enemy_hp_bar.size = Vector2(290, 22)
-	enemy_hp_bar.position = Vector2(15, 90)
-	enemy_panel.add_child(enemy_hp_bar)
+	enemy_hp_bar.value     = enemy_hp
+	enemy_hp_bar.size      = Vector2(326, 16)
+	enemy_hp_bar.position  = Vector2(770, 178)
+	add_child(enemy_hp_bar)
 
 	enemy_hp_label = Label.new()
-	enemy_hp_label.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
-	enemy_hp_label.add_theme_font_size_override("font_size", 12)
-	enemy_hp_label.modulate = Color(0.9, 0.6, 0.6)
-	enemy_hp_label.position = Vector2(15, 118)
-	enemy_panel.add_child(enemy_hp_label)
+	enemy_hp_label.text = "HP  %d / %d" % [enemy_hp, enemy_max_hp]
+	enemy_hp_label.add_theme_font_size_override("font_size", 13)
+	enemy_hp_label.modulate = es_col
+	enemy_hp_label.position = Vector2(770, 202)
+	add_child(enemy_hp_label)
 
-	# VS
 	var vs := Label.new()
 	vs.text = "VS"
-	vs.add_theme_font_size_override("font_size", 48)
-	vs.modulate = Color(0.5, 0.5, 0.6)
-	vs.position = Vector2(540, 180)
+	vs.add_theme_font_size_override("font_size", 44)
+	vs.modulate = Color(0.18,0.18,0.22)
+	vs.position = Vector2(554, 120)
 	add_child(vs)
 
-	# Status label
-	var status_lbl := Label.new()
-	status_lbl.name = "StatusLabel"
-	status_lbl.text = "Both sides roll. Highest moves first."
-	status_lbl.add_theme_font_size_override("font_size", 14)
-	status_lbl.modulate = Color(0.7, 0.7, 0.7)
-	status_lbl.position = Vector2(350, 300)
-	status_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(status_lbl)
+	var ib := ColorRect.new()
+	ib.color = Color(0.06,0.05,0.08)
+	ib.size  = Vector2(740, 82)
+	ib.position = Vector2(206, 298)
+	add_child(ib)
 
-	# Roll button
+	initiative_label = Label.new()
+	initiative_label.text = _get_initiative_text()
+	initiative_label.add_theme_font_size_override("font_size", 15)
+	initiative_label.modulate = Color(0.70,0.68,0.60)
+	initiative_label.position = Vector2(240, 306)
+	initiative_label.custom_minimum_size = Vector2(660, 0)
+	initiative_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(initiative_label)
+
 	roll_btn = Button.new()
 	roll_btn.text = "Roll Initiative"
-	roll_btn.custom_minimum_size = Vector2(220, 50)
-	roll_btn.add_theme_font_size_override("font_size", 16)
-	roll_btn.position = Vector2(465, 340)
+	roll_btn.custom_minimum_size = Vector2(270, 54)
+	roll_btn.add_theme_font_size_override("font_size", 18)
+	roll_btn.position = Vector2(441, 392)
 	roll_btn.pressed.connect(_roll_initiative)
-	_style_btn(roll_btn, Color(0.4, 0.6, 0.9))
 	add_child(roll_btn)
 
-	# Combat log
-	log_label = Label.new()
-	log_label.text = " "
-	log_label.add_theme_font_size_override("font_size", 14)
-	log_label.modulate = Color(0.8, 0.8, 0.8)
-	log_label.position = Vector2(100, 420)
-	log_label.custom_minimum_size = Vector2(950, 60)
-	log_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	add_child(log_label)
+	party_turn_label = Label.new()
+	party_turn_label.text = ""
+	party_turn_label.add_theme_font_size_override("font_size", 12)
+	party_turn_label.modulate = Color(0.70, 0.90, 0.70)
+	party_turn_label.position = Vector2(206, 464)
+	party_turn_label.custom_minimum_size = Vector2(380, 0)
+	party_turn_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(party_turn_label)
 
-	# Action buttons
+	var lb := ColorRect.new()
+	lb.color = Color(0.04,0.03,0.06)
+	lb.size  = Vector2(940, 80)
+	lb.position = Vector2(106, 460)
+	add_child(lb)
+
+	log_container = VBoxContainer.new()
+	log_container.position = Vector2(118, 465)
+	log_container.custom_minimum_size = Vector2(918, 0)
+	log_container.add_theme_constant_override("separation", 2)
+	add_child(log_container)
+
 	action_container = HBoxContainer.new()
-	action_container.position = Vector2(150, 520)
-	action_container.add_theme_constant_override("separation", 15)
+	action_container.position = Vector2(100, 556)
+	action_container.add_theme_constant_override("separation", 16)
 	action_container.visible = false
 	add_child(action_container)
 
-	_make_btn("Attack", Color(0.9, 0.3, 0.3), _on_attack)
-	_make_btn("Defend", Color(0.3, 0.6, 0.9), _on_defend)
-	_make_btn("Flee",   Color(0.7, 0.7, 0.3), _on_flee)
+	_build_action_buttons()
+	_build_recruit_panel()
+	_build_codex_panel()
+	_build_attr_panel()
 
-	subdue_btn = Button.new()
-	subdue_btn.text = "Subdue"
-	subdue_btn.custom_minimum_size = Vector2(160, 50)
-	subdue_btn.add_theme_font_size_override("font_size", 16)
-	subdue_btn.pressed.connect(_on_subdue)
-	_style_btn(subdue_btn, Color(0.7, 0.4, 0.9))
-	subdue_btn.visible = false
-	action_container.add_child(subdue_btn)
+func _get_initiative_text() -> String:
+	if GameData.party_stage == "nomad_party":
+		return "Party vs %s — roll 1d6. Highest side acts first. Ties go to you." % enemy_data.get("name","enemy")
+	return "Roll 1d6. Highest moves first. Ties go to you."
 
-func _style_btn(btn: Button, col: Color) -> void:
-	var style := StyleBoxFlat.new()
-	style.bg_color = col.darkened(0.3)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
-	btn.add_theme_stylebox_override("normal", style)
-	var hover := style.duplicate()
-	hover.bg_color = col
-	btn.add_theme_stylebox_override("hover", hover)
+func _build_action_buttons() -> void:
+	_make_action("⚔  Attack",  Color(0.80,0.22,0.22), _on_attack)
+	_make_action("🛡  Defend",  Color(0.22,0.50,0.80), _on_defend)
+	if enemy_data.get("faction","hostile") == "neutral":
+		_make_action("💬  Persuade", Color(0.30,0.72,0.44), _on_persuade)
+	_make_action("↩  Flee",    Color(0.50,0.50,0.22), _on_flee)
 
-func _make_btn(text: String, col: Color, callback: Callable) -> void:
+func _make_action(label: String, col: Color, cb: Callable) -> void:
 	var btn := Button.new()
-	btn.text = text
-	btn.custom_minimum_size = Vector2(160, 50)
+	btn.text = label
+	btn.custom_minimum_size = Vector2(210, 54)
 	btn.add_theme_font_size_override("font_size", 16)
-	_style_btn(btn, col)
-	btn.pressed.connect(callback)
+	btn.modulate = col
+	btn.pressed.connect(cb)
 	action_container.add_child(btn)
 
-func _update_subdue_button() -> void:
-	var hp_pct = float(enemy_hp) / enemy_max_hp
-	if hp_pct <= 0.35 and hp_pct > 0.0:
-		subdue_btn.visible = true
-		var chance = min(0.85, 0.25 + float(GameData.player_level) * 0.03)
-		subdue_btn.text = "Subdue (%.0f%%)" % (chance * 100)
-	else:
-		subdue_btn.visible = false
+func _build_recruit_panel() -> void:
+	recruit_panel = Control.new()
+	recruit_panel.visible = false
+	add_child(recruit_panel)
+	var rb := ColorRect.new()
+	rb.color = Color(0.06, 0.10, 0.06, 0.95)
+	rb.size  = Vector2(700, 130)
+	rb.position = Vector2(226, 460)
+	recruit_panel.add_child(rb)
+	var rl := Label.new()
+	rl.text = "They are subdued / willing. Recruit them?"
+	rl.add_theme_font_size_override("font_size", 16)
+	rl.modulate = Color(0.70, 0.92, 0.70)
+	rl.position = Vector2(240, 470)
+	recruit_panel.add_child(rl)
+	var recruit_btn := Button.new()
+	recruit_btn.text = "◈  Recruit"
+	recruit_btn.custom_minimum_size = Vector2(200, 48)
+	recruit_btn.add_theme_font_size_override("font_size", 16)
+	recruit_btn.modulate = Color(0.30, 1.0, 0.50)
+	recruit_btn.position = Vector2(240, 510)
+	recruit_btn.pressed.connect(_do_recruit)
+	recruit_panel.add_child(recruit_btn)
+	var skip_btn := Button.new()
+	skip_btn.text = "Leave them"
+	skip_btn.custom_minimum_size = Vector2(180, 48)
+	skip_btn.add_theme_font_size_override("font_size", 14)
+	skip_btn.modulate = Color(0.50, 0.50, 0.50)
+	skip_btn.position = Vector2(460, 510)
+	skip_btn.pressed.connect(_skip_recruit)
+	recruit_panel.add_child(skip_btn)
+
+func _build_codex_panel() -> void:
+	codex_panel = Control.new()
+	codex_panel.visible = false
+	add_child(codex_panel)
+	var cb := ColorRect.new()
+	cb.color = Color(0.05,0.06,0.10,0.96)
+	cb.size  = Vector2(380, 260)
+	cb.position = Vector2(20, 380)
+	codex_panel.add_child(cb)
+	var ct := Label.new()
+	ct.text = "CODEX"
+	ct.add_theme_font_size_override("font_size", 14)
+	ct.modulate = Color(0.55,0.55,0.75)
+	ct.position = Vector2(28, 385)
+	codex_panel.add_child(ct)
+	for i in range(3):
+		var sl := Label.new()
+		sl.text = "ACTIVE %d: %s" % [i+1, GameData.codex_active[i] if GameData.codex_active[i] != "" else "—"]
+		sl.add_theme_font_size_override("font_size", 11)
+		sl.modulate = Color(0.70,0.82,0.70)
+		sl.position = Vector2(28, 408 + i*18)
+		codex_panel.add_child(sl)
+	for i in range(3):
+		var sl := Label.new()
+		sl.text = "PASSIVE %d: %s" % [i+1, GameData.codex_passive[i] if GameData.codex_passive[i] != "" else "—"]
+		sl.add_theme_font_size_override("font_size", 11)
+		sl.modulate = Color(0.60,0.70,0.82)
+		sl.position = Vector2(28, 462 + i*18)
+		codex_panel.add_child(sl)
+
+func _build_attr_panel() -> void:
+	attr_panel = Control.new()
+	attr_panel.visible = false
+	add_child(attr_panel)
+	var ab := ColorRect.new()
+	ab.color = Color(0.06,0.06,0.10,0.96)
+	ab.size  = Vector2(320, 200)
+	ab.position = Vector2(416, 380)
+	attr_panel.add_child(ab)
+	var at := Label.new()
+	at.text = "ALLOCATE ATTRIBUTES — %d points" % GameData.attr_points
+	at.add_theme_font_size_override("font_size", 13)
+	at.modulate = Color(0.75,0.75,0.55)
+	at.position = Vector2(424, 385)
+	attr_panel.add_child(at)
+	var attrs := [["STR","str",Color(0.88,0.38,0.38)],["INT","int",Color(0.38,0.62,0.88)],
+				  ["DEX","dex",Color(0.38,0.88,0.62)],["LCK","luck",Color(0.88,0.78,0.28)]]
+	for i in range(4):
+		var info: Array = attrs[i]
+		var btn := Button.new()
+		btn.text = "+ %s (now %d)" % [info[0], _get_attr_val(info[1])]
+		btn.custom_minimum_size = Vector2(280, 38)
+		btn.add_theme_font_size_override("font_size", 13)
+		btn.modulate = info[2]
+		btn.position = Vector2(424, 410 + i * 44)
+		btn.pressed.connect(_spend_attr.bind(info[1]))
+		attr_panel.add_child(btn)
+
+func _get_attr_val(attr: String) -> int:
+	match attr:
+		"str": return GameData.attr_str
+		"int": return GameData.attr_int
+		"dex": return GameData.attr_dex
+		"luck": return GameData.attr_luck
+	return 0
+
+func _spend_attr(attr: String) -> void:
+	if GameData.spend_attr_point(attr):
+		_rebuild_attr_panel()
+
+func _rebuild_attr_panel() -> void:
+	attr_panel.queue_free()
+	_build_attr_panel()
+	if GameData.attr_points > 0:
+		attr_panel.visible = true
 
 func _roll_initiative() -> void:
 	roll_btn.visible = false
-
-	var p_roll = randi_range(1, 10) + int(GameData.get_initiative_bonus() * 10)
-	var e_roll = randi_range(1, 10)
-	p_roll += active_party_members.size()
-
-	var status = get_node_or_null("StatusLabel")
-	if status:
-		status.text = "Rolling..."
-
-	await get_tree().create_timer(0.5).timeout
-
-	if p_roll >= e_roll:
-		player_turn = true
-		if status:
-			status.text = "You roll %d. Enemy rolls %d. YOU go first!" % [p_roll, e_roll]
-			status.modulate = Color(0.4, 0.9, 0.4)
-		await get_tree().create_timer(1.0).timeout
-		_log("Your turn!")
+	var pr := randi_range(1, 6)
+	var er := randi_range(1, 6)
+	var p_str := "%s rolls %d" % [GameData.player_name, pr]
+	if GameData.party_stage == "nomad_party" and GameData.party_members.size() > 0:
+		p_str = "Your party rolls %d" % pr
+	initiative_label.text = "%s.  Enemy rolls %d.  %s moves first." % [p_str, er, "YOU" if pr >= er else "ENEMY"]
+	player_turn = pr >= er
+	await get_tree().create_timer(1.2).timeout
+	_update_party_turn_label()
+	if player_turn:
+		_log("Your move.")
 		action_container.visible = true
+		codex_panel.visible = true
+		if GameData.attr_points > 0:
+			attr_panel.visible = true
 	else:
-		player_turn = false
-		if status:
-			status.text = "You roll %d. Enemy rolls %d. ENEMY goes first!" % [p_roll, e_roll]
-			status.modulate = Color(0.9, 0.4, 0.4)
-		await get_tree().create_timer(1.0).timeout
 		_enemy_action()
+
+func _update_party_turn_label() -> void:
+	if GameData.party_stage == "nomad_party" and GameData.party_members.size() > 0:
+		var order: Array = GameData.get_party_turn_order()
+		var names := [GameData.player_name]
+		for m in order:
+			names.append(m.get("name","?"))
+		party_turn_label.text = "Turn order: " + " → ".join(names)
+	else:
+		party_turn_label.text = ""
 
 func _on_attack() -> void:
-	if not player_turn or combat_over:
-		return
+	if not player_turn or combat_over: return
+	defending = false
 	action_container.visible = false
-
-	# FIX: Use actual damage calculation instead of hardcoded 10
-	var base_dmg = GameData.get_base_damage()
-	var dmg = randi_range(base_dmg - 2, base_dmg + 8)
-	var is_crit = randf() < GameData.get_crit_chance()
-	if is_crit:
-		dmg *= 2
-
-	enemy_hp -= dmg
-	enemy_hp = max(enemy_hp, 0)
-	_update_all_bars()
-
-	if is_crit:
-		_log("CRITICAL HIT! %s attacks for %d damage!" % [GameData.player_name, dmg])
-	else:
-		_log("%s attacks for %d damage!" % [GameData.player_name, dmg])
-
-	if active_party_members.size() > 0:
-		await get_tree().create_timer(0.4).timeout
-		await _party_attack()
-
+	turn_count += 1
+	var dmg: int = randi_range(8, 18) + GameData.get_damage_bonus()
+	enemy_hp = max(enemy_hp - dmg, 0)
+	_update_bars()
+	_log("%s strikes for %d damage." % [GameData.player_name, dmg])
+	GameData.add_habit("Combat Strike")
 	if enemy_hp <= 0:
-		_end_combat(true)
+		_on_enemy_defeated()
 		return
-
 	player_turn = false
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.9).timeout
 	_enemy_action()
-
-func _party_attack() -> void:
-	for member in active_party_members:
-		# FIX: renamed from 'name' to 'member_name' to avoid shadowing built-in
-		var member_name = member.get("name", "Unknown")
-		var max_hp = member.get("max_hp", 80)
-		if party_member_hp.get(member_name, max_hp) <= 0:
-			continue
-
-		var dmg = randi_range(4, 8) + GameData.player_level
-		enemy_hp -= dmg
-		enemy_hp = max(enemy_hp, 0)
-		_update_all_bars()
-		_log("%s attacks for %d damage!" % [member_name, dmg])
-
-		if enemy_hp <= 0:
-			break
-		await get_tree().create_timer(0.3).timeout
-
-func _on_subdue() -> void:
-	if not player_turn or combat_over:
-		return
-	action_container.visible = false
-	_log("Attempting to subdue...")
-
-	var chance = min(0.85, 0.25 + float(GameData.player_level) * 0.03)
-	if randf() < chance:
-		_log("Subdued %s!" % enemy_name)
-
-		if enemy_real_name != "" and enemy_real_name != enemy_name:
-			await get_tree().create_timer(0.8).timeout
-			_log("Real name: %s" % enemy_real_name)
-			# Update enemy name label in panel
-			var name_lbl = _find_enemy_name_label()
-			if name_lbl:
-				name_lbl.text = "◆ " + enemy_real_name
-
-		var recruit_name = enemy_real_name if enemy_real_name != "" else enemy_name
-		GameData.add_party_member(recruit_name, enemy_call, enemy_type, 80)
-		_log("%s joins your party!" % recruit_name)
-
-		await get_tree().create_timer(1.2).timeout
-		_end_combat(true, true)
-	else:
-		_log("Subdue failed!")
-		await get_tree().create_timer(0.8).timeout
-		player_turn = false
-		_enemy_action()
-
-func _find_enemy_name_label() -> Label:
-	for child in enemy_panel.get_children():
-		if child is Label and child.text.begins_with("◆"):
-			return child
-	return null
 
 func _on_defend() -> void:
-	if not player_turn or combat_over:
-		return
+	if not player_turn or combat_over: return
 	defending = true
 	action_container.visible = false
-	_log("%s defends. Damage reduced!" % GameData.player_name)
+	_log("%s braces. Damage reduced this turn." % GameData.player_name)
+	GameData.add_habit("Combat Guard")
 	player_turn = false
-	await get_tree().create_timer(0.8).timeout
+	await get_tree().create_timer(0.9).timeout
 	_enemy_action()
 
-func _on_flee() -> void:
-	if combat_over:
-		return
+func _on_persuade() -> void:
+	if not player_turn or combat_over: return
+	if enemy_data.get("faction","hostile") != "neutral": return
 	action_container.visible = false
-	var flee_chance = 0.42 + GameData.get_flee_bonus()
-	if randf() < flee_chance:
-		_log("You escaped!")
+	var chance: float = 0.30 + GameData.get_persuade_bonus() + GameData.terrain_familiarity * 0.01
+	chance = clamp(chance, 0.05, 0.90)
+	GameData.add_habit("Persuasion")
+	if randf() < chance:
+		_log("They listen. The tension breaks. They are willing to talk.")
 		await get_tree().create_timer(1.0).timeout
-		_return_to_world(true)
+		_show_recruit_panel()
 	else:
-		_log("Can't escape!")
+		_log("They don't trust you yet. They hold their ground.")
+		player_turn = false
+		await get_tree().create_timer(0.8).timeout
+		_enemy_action()
+
+func _on_flee() -> void:
+	if combat_over: return
+	action_container.visible = false
+	var flee_chance: float = GameData.get_flee_chance()
+	GameData.add_habit("Strategic Retreat")
+	if randf() < flee_chance:
+		_log("You find an opening. You slip away.")
+		await get_tree().create_timer(1.5).timeout
+		get_tree().change_scene_to_file("res://world.tscn")
+	else:
+		_log("No opening. They cut off the path.")
 		player_turn = false
 		await get_tree().create_timer(0.8).timeout
 		_enemy_action()
 
 func _enemy_action() -> void:
-	if combat_over:
+	if combat_over: return
+	if enemy_data.get("faction","hostile") == "neutral" and randf() < 0.25:
+		_log("They back off. Not looking for a fight.")
+		player_turn = true
+		await get_tree().create_timer(0.7).timeout
+		_log("Your move.")
+		action_container.visible = true
 		return
-
-	var dmg = randi_range(enemy_damage_min, enemy_damage_max)
-	var defense = GameData.get_base_defense()
-	dmg = max(1, dmg - defense)
-
+	var dmg := randi_range(5, 14)
 	if defending:
-		dmg = int(dmg * 0.5)
+		dmg = int(dmg * 0.40)
 		defending = false
-
-	# Enemy targets a random party member 40% of the time
-	if active_party_members.size() > 0 and randf() < 0.4:
-		var idx = randi_range(0, active_party_members.size() - 1)
-		var target = active_party_members[idx]
-		# FIX: renamed from 'name' to 'target_name'
-		var target_name = target.get("name", "Unknown")
-		var t_hp = party_member_hp.get(target_name, 80)
-		t_hp -= dmg
-		t_hp = max(t_hp, 0)
-		party_member_hp[target_name] = t_hp
-		_log("Enemy hits %s for %d!" % [target_name, dmg])
-		_update_party_ui()
-	else:
-		player_hp -= dmg
-		player_hp = max(player_hp, 0)
-		_log("Enemy hits you for %d!" % dmg)
-		_update_all_bars()
-
+	player_hp = max(player_hp - dmg, 0)
+	_update_bars()
+	_log("Enemy strikes for %d damage." % dmg)
 	if player_hp <= 0:
-		# Check if all party also dead
-		var all_dead = true
-		for m in active_party_members:
-			if party_member_hp.get(m.get("name", ""), 0) > 0:
-				all_dead = false
-				break
-		if all_dead:
-			_end_combat(false)
-			return
-
+		_end_combat(false)
+		return
 	player_turn = true
-	var status = get_node_or_null("StatusLabel")
-	if status:
-		status.text = "★ YOUR TURN ★"
-		status.modulate = Color(0.4, 0.9, 0.4)
-	await get_tree().create_timer(0.6).timeout
-	_log("Your move!")
+	await get_tree().create_timer(0.65).timeout
+	_log("Your move.")
 	action_container.visible = true
 
-func _end_combat(won: bool, subdued: bool = false) -> void:
+func _on_enemy_defeated() -> void:
 	combat_over = true
 	action_container.visible = false
+	
+	# FIX: Break the Variant chain explicitly to satisfy strict typing
+	var lvl_val: Variant = enemy_data.get("level", 1)
+	var enemy_lvl: int = lvl_val as int
+	var xp: int = 20 + (enemy_lvl * 12)
+	
+	GameData.add_xp(xp)
+	GameData.player_hp = max(player_hp, 1)
+	_log("They fall. +%d XP." % xp)
+	
+	GameData.add_to_codex(
+		enemy_data.get("name", "Unknown"),
+		enemy_data.get("call", "[ Unread ]"),
+		{"level": enemy_lvl, "faction": enemy_data.get("faction", "hostile")},
+		"Defeated in combat."
+	)
+	
+	await get_tree().create_timer(0.8).timeout
+	_show_recruit_panel()
 
-	if won:
-		if subdued:
-			_log("Enemy joins your party!")
-		else:
-			_log("Victory! +%d XP" % xp_reward)
-			GameData.add_xp(xp_reward)
-	else:
-		_log("You were defeated...")
+func _show_recruit_panel() -> void:
+	action_container.visible = false
+	recruit_panel.visible = true
 
-	await get_tree().create_timer(2.0).timeout
-	_return_to_world(won)
-
-func _return_to_world(_won: bool) -> void:
-	# FIX: Sync party HP back to GameData properly
-	for i in range(active_party_members.size()):
-		if i < GameData.party_members.size():
-			# FIX: renamed from 'name' to 'mem_name'
-			var mem_name = active_party_members[i].get("name", "Unknown")
-			if party_member_hp.has(mem_name):
-				GameData.party_members[i]["hp"] = party_member_hp[mem_name]
-	GameData.save_game()
+func _do_recruit() -> void:
+	recruit_panel.visible = false
+	var new_member := {
+		"name": enemy_data.get("name","Unknown"),
+		"emoticon": "◇",
+		"color": Color(randf_range(0.4,0.9), randf_range(0.4,0.9), randf_range(0.4,0.9)),
+		"level": enemy_data.get("level",1),
+		"hp": enemy_data.get("hp",40),
+		"max_hp": enemy_data.get("max_hp",40),
+		"role": _guess_role(),
+		"mastery_1": "", "mastery_2": "",
+		"habits": {}, "codex_skills": [],
+		"relationship": 40.0, "loyalty": 30.0,
+		"emotional_state": "cautious",
+		"call": "[ Unread ]", "call_tier": 0,
+		"type": enemy_data.get("faction","neutral"),
+		"is_alpha": false,
+	}
+	GameData.recruit_member(new_member)
+	_log("%s joins you." % new_member["name"])
+	if GameData.party_members.size() == 1:
+		GameData.trigger_formation_quest()
+	await get_tree().create_timer(2.2).timeout
 	get_tree().change_scene_to_file("res://world.tscn")
 
-func _update_all_bars() -> void:
-	player_hp_bar.value = player_hp
-	player_hp_label.text = "HP: %d / %d" % [player_hp, player_max_hp]
-	enemy_hp_bar.value = enemy_hp
-	enemy_hp_label.text = "HP: %d / %d" % [enemy_hp, enemy_max_hp]
-	_update_subdue_button()
+func _guess_role() -> String:
+	var lv := enemy_data.get("level", 1)
+	if lv >= 4: return "breaker"
+	elif lv >= 2: return "anchor"
+	return "auxiliary"
 
-func _update_party_ui() -> void:
-	for i in range(active_party_members.size()):
-		# FIX: renamed from 'name' to 'mem_name'
-		var mem_name = active_party_members[i].get("name", "Unknown")
-		var max_hp = active_party_members[i].get("max_hp", 80)
-		var cur = party_member_hp.get(mem_name, max_hp)
+func _skip_recruit() -> void:
+	recruit_panel.visible = false
+	await get_tree().create_timer(0.5).timeout
+	get_tree().change_scene_to_file("res://world.tscn")
 
-		if i < party_hp_labels.size():
-			party_hp_labels[i].text = "HP: %d/%d" % [cur, max_hp]
-			party_hp_labels[i].modulate = Color(0.7, 0.9, 0.7) if cur > 0 else Color(0.9, 0.3, 0.3)
-		if i < party_hp_bars.size():
-			party_hp_bars[i].value = cur
+func _update_bars() -> void:
+	if is_instance_valid(player_hp_bar): player_hp_bar.value = player_hp
+	if is_instance_valid(enemy_hp_bar):  enemy_hp_bar.value  = enemy_hp
+	if is_instance_valid(player_hp_label): player_hp_label.text = "HP  %d / %d" % [player_hp, player_max_hp]
+	if is_instance_valid(enemy_hp_label):  enemy_hp_label.text  = "HP  %d / %d" % [enemy_hp, enemy_max_hp]
+
+func _end_combat(won: bool) -> void:
+	combat_over = true
+	action_container.visible = false
+	if won:
+		GameData.player_hp = max(player_hp, 1)
+		_log("You move on.")
+	else:
+		GameData.player_hp = 1
+		_log("You fall. The world continues without permission.")
+	await get_tree().create_timer(2.6).timeout
+	get_tree().change_scene_to_file("res://world.tscn")
 
 func _log(text: String) -> void:
-	log_label.text = text
+	if not is_instance_valid(log_container): return
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.add_theme_font_size_override("font_size", 15)
+	lbl.modulate = Color(0.78,0.76,0.70)
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lbl.custom_minimum_size = Vector2(918, 0)
+	log_container.add_child(lbl)
+	while log_container.get_child_count() > 3:
+		log_container.get_child(0).queue_free()
+
+func _load_enemy_desc_groq() -> void:
+	if GameData.groq_api_key.begins_with("PASTE") or GameData.groq_api_key.length() < 10: return
+	var http := HTTPRequest.new()
+	add_child(http)
+	http.request_completed.connect(_on_desc_resp.bind(http))
+	var prompt := "Enemy: %s. Type: %s. Region: %s. One sentence under 20 words. Cold, specific, grounded. What you see when you look at them." % [
+		enemy_data.get("name","unknown"), enemy_data.get("faction","hostile"), GameData.starting_region]
+	var body := JSON.stringify({"model":"llama3-8b-8192","messages":[{"role":"user","content":prompt}],"max_tokens":55,"temperature":0.7})
+	http.request("https://api.groq.com/openai/v1/chat/completions",
+		["Content-Type: application/json","Authorization: Bearer "+GameData.groq_api_key],
+		HTTPClient.METHOD_POST, body)
+
+func _on_desc_resp(_r:int, code:int, _h:PackedStringArray, body:PackedByteArray, http:HTTPRequest) -> void:
+	http.queue_free()
+	if code != 200: return
+	
+	var json := JSON.new()
+	if json.parse(body.get_string_from_utf8()) != OK: return
+	
+	var d: Dictionary = json.get_data() as Dictionary
+	
+	if not d.has("choices"): return
+	
+	var choices: Array = d["choices"]
+	if choices.is_empty(): return
+	
+	var message: Dictionary = choices[0].get("message", {})
+	var t: String = message.get("content", "").strip_edges()
+	
+	if t.length() > 0 and is_instance_valid(enemy_desc_label):
+		enemy_desc_label.text = t

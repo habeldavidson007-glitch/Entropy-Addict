@@ -1,201 +1,232 @@
 extends CharacterBody2D
-
-signal codex_open_requested
+# ═══════════════════════════════════════════════════════════
+# PLAYER — Top-down movement, 2×d12 dice, HUD
+# ═══════════════════════════════════════════════════════════
 
 const TILE_SIZE: int = 32
-const MOVE_DURATION: float = 0.15
+const MOVE_DURATION: float = 0.10
 
-# FIX: Guard against CharacterProfile not being available
-var profile = null
-var color_rect: ColorRect
+var shadow_rect: ColorRect
+var body_rect: ColorRect
 var collision_shape: CollisionShape2D
-var dice_result: int = 0
-var is_moving: bool = false
+
+var dice_result: int  = 0
+var is_moving: bool   = false
 var tiles_remaining: int = 0
 var move_direction: Vector2 = Vector2.ZERO
 var target_position: Vector2 = Vector2.ZERO
 var blocked_direction: String = ""
+
 var ui_layer: CanvasLayer
 var dice_label: Label
+var hp_label: Label
+var level_label: Label
+var time_label: Label
+var familiarity_label: Label
+var quest_panel: Control
+var quest_label: Label
 var direction_buttons: Control
 var buttons: Dictionary = {}
-var world_ref: Node2D
+
 var camera: Camera2D
 var shake_intensity: float = 0.0
-var shake_duration: float = 0.0
-var shake_timer: float = 0.0
+var shake_duration: float  = 0.0
+var shake_timer: float     = 0.0
+
 var flash_overlay: ColorRect
 var is_transitioning: bool = false
-var exploration_label: Label
-var familiar_label: Label
-var save_btn: Button
-var load_btn: Button
-var save_status_label: Label
-var quest_display: Label
-
-func _init_profile() -> void:
-	# FIX: Safely create profile only if class exists
-	if ClassDB.class_exists("CharacterProfile"):
-		profile = load("res://scripts/data/CharacterProfile.gd").new()
-		if profile:
-			profile.character_name = GameData.player_name if GameData else "Traveler"
-			profile.call_title = "Silent Call"
-			profile.fate_title = ""
-			profile.field_role = "Striker"
-			profile.mastery_1_name = "Mind"
-			profile.mastery_1_level = 0
-			profile.mastery_2_name = "Weapon"
-			profile.mastery_2_level = 0
-			profile.root_stage = "Habit"
-			profile.root_progress = 0
-			profile.level = GameData.player_level if GameData else 1
-			profile.xp = GameData.player_xp if GameData else 0
-			profile.xp_to_next_level = GameData.xp_to_next_level if GameData else 150
-			profile.health = GameData.get_max_hp() if GameData else 80
-			profile.health_max = GameData.get_max_hp() if GameData else 80
-			profile.stamina = 100
-			profile.stamina_max = 100
+var world_ref: Node
+var _quest_show_timer: float = 0.0
 
 func _ready() -> void:
-	_init_profile()
-
-	# Initialize quest system
-	if GameData and GameData.has_method("init_quests"):
-		GameData.init_quests()
-
-	position = GameData.get_spawn_position() * TILE_SIZE if GameData else Vector2(640, 320)
+	position = GameData.get_spawn_position() * TILE_SIZE
 	target_position = position
+	_build_player()
+	_setup_camera()
+	_setup_ui()
+	world_ref = get_parent()
+	
+	if GameData.has_signal("quest_completed"):
+		GameData.connect("quest_completed", _on_quest_completed)
+	if GameData.has_signal("level_up"):
+		GameData.connect("level_up", _on_level_up)
+	if GameData.has_signal("party_updated"):
+		GameData.connect("party_updated", _on_party_updated)
+		
+	GameData.trigger_explore_quest()
 
-	color_rect = ColorRect.new()
-	color_rect.size = Vector2(TILE_SIZE, TILE_SIZE)
-	color_rect.position = Vector2(-TILE_SIZE / 2.0, -TILE_SIZE / 2.0)
-	color_rect.color = GameData.player_color if GameData else Color.GREEN
-	add_child(color_rect)
+func _build_player() -> void:
+	shadow_rect = ColorRect.new()
+	shadow_rect.size = Vector2(TILE_SIZE-2, TILE_SIZE-2)
+	shadow_rect.position = Vector2(-TILE_SIZE/2.0+4, -TILE_SIZE/2.0+5)
+	shadow_rect.color = Color(0,0,0,0.38)
+	add_child(shadow_rect)
+
+	body_rect = ColorRect.new()
+	body_rect.size = Vector2(TILE_SIZE-4, TILE_SIZE-4)
+	body_rect.position = Vector2(-TILE_SIZE/2.0, -TILE_SIZE/2.0)
+	body_rect.color = GameData.player_color
+	add_child(body_rect)
+
+	var hi1 := ColorRect.new()
+	hi1.size = Vector2(TILE_SIZE-4, 5)
+	hi1.position = Vector2(-TILE_SIZE/2.0, -TILE_SIZE/2.0)
+	hi1.color = Color(1,1,1,0.26)
+	add_child(hi1)
+	
+	var hi2 := ColorRect.new()
+	hi2.size = Vector2(4, TILE_SIZE-4)
+	hi2.position = Vector2(-TILE_SIZE/2.0, -TILE_SIZE/2.0)
+	hi2.color = Color(1,1,1,0.14)
+	add_child(hi2)
 
 	collision_shape = CollisionShape2D.new()
 	var shape := RectangleShape2D.new()
-	shape.size = Vector2(TILE_SIZE, TILE_SIZE)
+	shape.size = Vector2(TILE_SIZE-8, TILE_SIZE-8)
 	collision_shape.shape = shape
 	add_child(collision_shape)
 
+func _setup_camera() -> void:
 	camera = Camera2D.new()
 	camera.enabled = true
 	camera.position_smoothing_enabled = true
-	camera.position_smoothing_speed = 5.0
+	camera.position_smoothing_speed = 5.5
+	camera.zoom = Vector2(1.5, 1.5)
 	add_child(camera)
-
-	_setup_ui()
-	world_ref = get_parent()
-
-	# Connect quest signal
-	if GameData and GameData.has_signal("quest_completed"):
-		if not GameData.quest_completed.is_connected(_on_quest_completed):
-			GameData.quest_completed.connect(_on_quest_completed)
-
-func _on_quest_completed(quest_id: String) -> void:
-	if save_status_label and GameData:
-		var quest = GameData.quests.get(quest_id)
-		if quest:
-			save_status_label.text = "Quest Complete: %s!" % quest.get("title", quest_id)
-			save_status_label.modulate = Color(0.4, 0.9, 0.4)
-			await get_tree().create_timer(3.0).timeout
-			if save_status_label:
-				save_status_label.text = ""
 
 func _setup_ui() -> void:
 	ui_layer = CanvasLayer.new()
+	ui_layer.layer = 10
 	add_child(ui_layer)
 
 	flash_overlay = ColorRect.new()
-	flash_overlay.color = Color(1, 1, 1, 0)
-	flash_overlay.size = Vector2(1152, 648)
-	flash_overlay.position = Vector2(-576, -324)
+	flash_overlay.color = Color(1,1,1,0)
+	flash_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	flash_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	ui_layer.add_child(flash_overlay)
 
+	var hud := ColorRect.new()
+	hud.color = Color(0.04,0.04,0.05,0.92)
+	hud.size = Vector2(1152, 54)
+	ui_layer.add_child(hud)
+	
+	var accent := ColorRect.new()
+	accent.color = GameData.player_color * Color(0.6,0.6,0.6,1)
+	accent.size = Vector2(1152, 2)
+	accent.position = Vector2(0, 52)
+	ui_layer.add_child(accent)
+
+	var name_lbl := Label.new()
+	name_lbl.text = "%s  %s" % [GameData.player_emoticon, GameData.player_name]
+	name_lbl.add_theme_font_size_override("font_size", 20)
+	name_lbl.modulate = GameData.player_color
+	name_lbl.position = Vector2(14, 12)
+	ui_layer.add_child(name_lbl)
+
+	var reg_lbl := Label.new()
+	reg_lbl.text = GameData.starting_region
+	reg_lbl.add_theme_font_size_override("font_size", 10)
+	reg_lbl.modulate = Color(0.40,0.40,0.40)
+	reg_lbl.position = Vector2(14, 38)
+	ui_layer.add_child(reg_lbl)
+
+	hp_label = Label.new()
+	hp_label.text = "HP  %d / %d" % [GameData.player_hp, GameData.player_max_hp]
+	hp_label.add_theme_font_size_override("font_size", 14)
+	hp_label.modulate = Color(0.55, 0.88, 0.55)
+	hp_label.position = Vector2(280, 10)
+	ui_layer.add_child(hp_label)
+
+	level_label = Label.new()
+	level_label.text = "Lv.%d  XP %d/%d  STR%d INT%d DEX%d LCK%d" % [
+		GameData.player_level, GameData.player_xp, GameData.player_level*120,
+		GameData.attr_str, GameData.attr_int, GameData.attr_dex, GameData.attr_luck]
+	level_label.add_theme_font_size_override("font_size", 10)
+	level_label.modulate = Color(0.50,0.50,0.50)
+	level_label.position = Vector2(280, 33)
+	ui_layer.add_child(level_label)
+
+	familiarity_label = Label.new()
+	familiarity_label.text = "Terrain %.1f  |  Dodge +%.0f%%" % [GameData.terrain_familiarity, GameData.get_dodge_bonus()*100]
+	familiarity_label.add_theme_font_size_override("font_size", 10)
+	familiarity_label.modulate = Color(0.42,0.55,0.42)
+	familiarity_label.position = Vector2(680, 14)
+	ui_layer.add_child(familiarity_label)
+
+	time_label = Label.new()
+	time_label.text = GameData.get_time_label()
+	time_label.add_theme_font_size_override("font_size", 12)
+	time_label.modulate = Color(0.62,0.60,0.50)
+	time_label.position = Vector2(900, 10)
+	ui_layer.add_child(time_label)
+
+	var day_lbl := Label.new()
+	day_lbl.text = "Day %d" % GameData.days_survived
+	day_lbl.add_theme_font_size_override("font_size", 11)
+	day_lbl.modulate = Color(0.35,0.35,0.35)
+	day_lbl.position = Vector2(900, 30)
+	ui_layer.add_child(day_lbl)
+
+	if GameData.first_habit_name != "":
+		var habit_lbl := Label.new()
+		habit_lbl.text = "[ %s ]" % GameData.first_habit_name
+		habit_lbl.add_theme_font_size_override("font_size", 10)
+		habit_lbl.modulate = Color(0.45,0.68,0.45)
+		habit_lbl.position = Vector2(550, 14)
+		ui_layer.add_child(habit_lbl)
+
+	var status_bg := ColorRect.new()
+	status_bg.color = Color(0.04,0.04,0.05,0.78)
+	status_bg.size = Vector2(680, 36)
+	status_bg.position = Vector2(14, 56)
+	ui_layer.add_child(status_bg)
+
 	dice_label = Label.new()
-	dice_label.position = Vector2(20, 20)
-	dice_label.text = "%s — Press SPACE to roll!" % (GameData.player_name if GameData else "Traveler")
-	dice_label.add_theme_font_size_override("font_size", 18)
-	dice_label.modulate = Color(0.9, 0.9, 0.85)
+	dice_label.position = Vector2(20, 62)
+	dice_label.text = "Press SPACE to roll the dice. (2d12)"
+	dice_label.add_theme_font_size_override("font_size", 15)
+	dice_label.modulate = Color(0.84,0.81,0.72)
 	ui_layer.add_child(dice_label)
 
-	var region_label := Label.new()
-	region_label.position = Vector2(20, 50)
-	region_label.text = GameData.starting_region if GameData else "Ashveld Flats"
-	region_label.add_theme_font_size_override("font_size", 12)
-	region_label.modulate = Color(0.5, 0.5, 0.5)
-	ui_layer.add_child(region_label)
-
-	exploration_label = Label.new()
-	exploration_label.position = Vector2(20, 80)
-	exploration_label.text = "Explored: %s" % (GameData.get_exploration_display() if GameData else "0%")
-	exploration_label.add_theme_font_size_override("font_size", 12)
-	exploration_label.modulate = Color(0.4, 0.8, 0.9)
-	ui_layer.add_child(exploration_label)
-
-	familiar_label = Label.new()
-	familiar_label.position = Vector2(20, 100)
-	familiar_label.text = "Familiar Env: +%d" % (GameData.familiar_environment_bonus if GameData else 0)
-	familiar_label.add_theme_font_size_override("font_size", 12)
-	familiar_label.modulate = Color(0.5, 0.5, 0.5)
-	ui_layer.add_child(familiar_label)
-
-	_setup_quest_display()
+	quest_panel = Control.new()
+	quest_panel.visible = false
+	ui_layer.add_child(quest_panel)
+	
+	var qbg := ColorRect.new()
+	qbg.color = Color(0.06,0.08,0.06,0.92)
+	qbg.size = Vector2(580, 56)
+	qbg.position = Vector2(286, 56)
+	quest_panel.add_child(qbg)
+	
+	var qaccent := ColorRect.new()
+	qaccent.color = Color(0.28, 0.88, 0.28)
+	qaccent.size = Vector2(3, 56)
+	qaccent.position = Vector2(286, 56)
+	quest_panel.add_child(qaccent)
+	
+	quest_label = Label.new()
+	quest_label.position = Vector2(296, 62)
+	quest_label.text = ""
+	quest_label.add_theme_font_size_override("font_size", 13)
+	quest_label.modulate = Color(0.6, 0.92, 0.6)
+	quest_label.custom_minimum_size = Vector2(566, 0)
+	quest_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	quest_panel.add_child(quest_label)
 
 	direction_buttons = Control.new()
 	direction_buttons.visible = false
 	ui_layer.add_child(direction_buttons)
-
-	_make_button("▲ Up",    Vector2(200, 100), "up")
-	_make_button("▼ Down",  Vector2(200, 180), "down")
-	_make_button("◄ Left",  Vector2(110, 140), "left")
-	_make_button("► Right", Vector2(290, 140), "right")
-
-	_setup_save_load_ui()
-
-func _setup_quest_display() -> void:
-	var quest_panel := ColorRect.new()
-	quest_panel.color = Color(0.1, 0.08, 0.12)
-	quest_panel.size = Vector2(350, 100)
-	quest_panel.position = Vector2(20, 540)
-	ui_layer.add_child(quest_panel)
-
-	var title := Label.new()
-	title.text = "★ ACTIVE QUESTS"
-	title.add_theme_font_size_override("font_size", 12)
-	title.modulate = Color(0.9, 0.7, 0.3)
-	title.position = Vector2(10, 8)
-	quest_panel.add_child(title)
-
-	quest_display = Label.new()
-	quest_display.position = Vector2(10, 28)
-	quest_display.custom_minimum_size = Vector2(330, 62)
-	quest_display.add_theme_font_size_override("font_size", 10)
-	quest_display.modulate = Color(0.8, 0.8, 0.8)
-	quest_display.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	quest_panel.add_child(quest_display)
-
-	_update_quest_display()
-
-func _update_quest_display() -> void:
-	if not quest_display or not GameData or not GameData.has_method("get_active_quests"):
-		return
-	var active_quests = GameData.get_active_quests()
-	if active_quests.size() == 0:
-		quest_display.text = "No active quests"
-		quest_display.modulate = Color(0.6, 0.6, 0.6)
-	else:
-		var text = ""
-		for quest in active_quests:
-			text += "◆ %s — %d/%d\n" % [quest.get("title", "Quest"), quest.get("current", 0), quest.get("requirement", 1)]
-		quest_display.text = text.strip_edges()
+	_make_button("▲", Vector2(220, 110), "up")
+	_make_button("▼", Vector2(220, 188), "down")
+	_make_button("◄", Vector2(142, 148), "left")
+	_make_button("►", Vector2(298, 148), "right")
 
 func _make_button(label: String, pos: Vector2, dir: String) -> void:
 	var btn := Button.new()
 	btn.text = label
 	btn.position = pos
-	btn.size = Vector2(80, 40)
+	btn.size = Vector2(68, 68)
+	btn.add_theme_font_size_override("font_size", 26)
 	btn.pressed.connect(_on_direction_chosen.bind(dir))
 	direction_buttons.add_child(btn)
 	buttons[dir] = btn
@@ -206,14 +237,7 @@ func _show_direction_buttons(blocked: String = "") -> void:
 		buttons[dir].visible = (dir != blocked)
 
 func _input(event: InputEvent) -> void:
-	# Codex toggle — only emit if profile exists
-	if event.is_action_pressed("toggle_codex"):
-		if profile:
-			emit_signal("codex_open_requested", profile)
-		return
-
-	if is_transitioning:
-		return
+	if is_transitioning: return
 	if event.is_action_pressed("ui_accept") and not is_moving and dice_result == 0 and tiles_remaining == 0:
 		_roll_dice()
 		return
@@ -228,12 +252,13 @@ func _input(event: InputEvent) -> void:
 			_on_direction_chosen("right")
 
 func _roll_dice() -> void:
-	var die1 := randi_range(1, 6)
-	var die2 := randi_range(1, 6)
-	dice_result = die1 + die2
+	var d1 := randi_range(1, 12)
+	var d2 := randi_range(1, 12)
+	dice_result = d1 + d2
 	blocked_direction = ""
-	dice_label.text = "Rolled: %d + %d = %d — Choose direction!" % [die1, die2, dice_result]
+	dice_label.text = "Rolled %d + %d = %d  —  choose direction." % [d1, d2, dice_result]
 	_show_direction_buttons()
+	GameData.add_habit("Dice Roll")
 
 func _on_direction_chosen(dir: String) -> void:
 	direction_buttons.visible = false
@@ -246,80 +271,61 @@ func _on_direction_chosen(dir: String) -> void:
 		"left":  move_direction = Vector2(-TILE_SIZE, 0)
 		"right": move_direction = Vector2( TILE_SIZE, 0)
 	blocked_direction = ""
-	is_moving = true
 	_move_next_tile()
 
 func _move_next_tile() -> void:
 	if tiles_remaining <= 0:
-		var grid_pos := position / TILE_SIZE
-		_check_detection(grid_pos)
-		if world_ref and world_ref.has_method("check_encounter") and world_ref.check_encounter(grid_pos):
-			_trigger_battle_transition()
+		var gp := Vector2i(position / TILE_SIZE)
+		if world_ref:
+			world_ref.update_enemy_visibility(gp)
+			var detect_level: String = world_ref.get_detection_level(gp)
+			var dist: float = world_ref.get_closest_enemy_distance(gp)
+			_check_detection(detect_level, dist)
+			if world_ref.check_encounter(gp):
+				_trigger_battle_transition()
+			else:
+				is_moving = false
 		else:
 			is_moving = false
-			dice_label.text = "%s — Press SPACE to roll!" % (GameData.player_name if GameData else "Traveler")
 		return
-
-	var next_pos := position + move_direction
-	var next_grid := next_pos / TILE_SIZE
-
-	if world_ref and world_ref.has_method("is_walkable") and not world_ref.is_walkable(next_grid):
-		if move_direction == Vector2(0, -TILE_SIZE):   blocked_direction = "up"
-		elif move_direction == Vector2(0,  TILE_SIZE): blocked_direction = "down"
-		elif move_direction == Vector2(-TILE_SIZE, 0): blocked_direction = "left"
-		elif move_direction == Vector2( TILE_SIZE, 0): blocked_direction = "right"
+		
+	var next_pos  := position + move_direction
+	var next_grid := Vector2i(next_pos / TILE_SIZE)
+	
+	if not world_ref or not world_ref.is_walkable(next_grid):
+		if   move_direction == Vector2(0,-TILE_SIZE): blocked_direction = "up"
+		elif move_direction == Vector2(0, TILE_SIZE):  blocked_direction = "down"
+		elif move_direction == Vector2(-TILE_SIZE,0):  blocked_direction = "left"
+		elif move_direction == Vector2( TILE_SIZE,0):  blocked_direction = "right"
 		is_moving = false
-		dice_label.text = "Boulder ahead! %d moves left — pick another direction." % tiles_remaining
+		dice_label.text = "Blocked. %d moves left — choose another direction." % tiles_remaining
 		_show_direction_buttons(blocked_direction)
 		return
-
+		
+	is_moving = true
 	target_position = next_pos
 	tiles_remaining -= 1
 
-func _check_detection(grid_pos: Vector2) -> void:
-	if world_ref and world_ref.has_method("update_enemy_visibility"):
-		world_ref.update_enemy_visibility(grid_pos)
-
-	if exploration_label and GameData:
-		exploration_label.text = "Explored: %s" % GameData.get_exploration_display()
-
-	if familiar_label and GameData:
-		var bonus = GameData.familiar_environment_bonus
-		familiar_label.text = "Familiar Env: +%d" % bonus
-		familiar_label.modulate = Color(0.9, 0.9, 0.3) if bonus > 0 else Color(0.5, 0.5, 0.5)
-
-	_update_quest_display()
-
-	var level: String = "safe"
-	var dist: float = 0.0
-	if world_ref:
-		if world_ref.has_method("get_detection_level"):
-			level = world_ref.get_detection_level(grid_pos)
-		if world_ref.has_method("get_closest_enemy_distance"):
-			dist = world_ref.get_closest_enemy_distance(grid_pos)
-
+func _check_detection(level: String, dist: float) -> void:
 	match level:
-		"encounter":
-			dice_label.text = "❗ Enemy right here!"
+		"encounter": dice_label.text = "❗ Enemy right here."
 		"visible":
-			dice_label.text = "⚠ Enemy close! %.0f tiles away — stay sharp!" % dist
-			_start_shake(2.0, 0.3)
-		"warning":
-			dice_label.text = "👁 Detected a presence! %.0f tiles away — be aware!" % dist
-		"safe":
-			dice_label.text = "%s — Press SPACE to roll!" % (GameData.player_name if GameData else "Traveler")
+			dice_label.text = "⚠  Enemy %.0f tiles away. Stay sharp." % dist
+			_start_shake(2.5, 0.28)
+		"warning":   dice_label.text = "👁  Presence detected — %.0f tiles. Be aware." % dist
+		"safe":      dice_label.text = "Press SPACE to roll. (2d12)"
 
 func _trigger_battle_transition() -> void:
 	is_transitioning = true
-	dice_label.text = "⚔ Enemy encountered!"
-	_start_shake(8.0, 0.6)
-	var tween := create_tween()
-	tween.tween_property(flash_overlay, "color", Color(1, 1, 1, 1), 0.15)
-	tween.tween_property(flash_overlay, "color", Color(1, 1, 1, 0), 0.15)
-	tween.tween_property(flash_overlay, "color", Color(1, 1, 1, 1), 0.15)
-	tween.tween_property(flash_overlay, "color", Color(1, 1, 1, 0), 0.15)
-	tween.tween_property(flash_overlay, "color", Color(1, 1, 1, 1), 0.30)
-	tween.tween_callback(func():
+	dice_label.text = "⚔  Enemy encountered."
+	_start_shake(10.0, 0.60)
+	var tw := create_tween()
+	tw.tween_property(flash_overlay, "color", Color(1,1,1,1), 0.11)
+	tw.tween_property(flash_overlay, "color", Color(1,1,1,0), 0.11)
+	tw.tween_property(flash_overlay, "color", Color(1,1,1,1), 0.11)
+	tw.tween_property(flash_overlay, "color", Color(1,1,1,0), 0.11)
+	tw.tween_property(flash_overlay, "color", Color(1,1,1,1), 0.30)
+	tw.tween_callback(func() -> void:
 		get_tree().change_scene_to_file("res://combat.tscn")
 	)
 
@@ -328,11 +334,28 @@ func _start_shake(intensity: float, duration: float) -> void:
 	shake_duration  = duration
 	shake_timer     = duration
 
+func _on_quest_completed(quest_id: String) -> void:
+	_show_quest_notification("✓ Quest complete: " + quest_id.replace("_"," ").capitalize())
+
+func _on_level_up(new_level: int) -> void:
+	_show_quest_notification("↑ Level up! Now Lv.%d — %d attribute points available." % [new_level, GameData.attr_points])
+
+func _on_party_updated() -> void:
+	if GameData.party_stage == "nomad_party":
+		_show_quest_notification("◈ Nomad Party formed — %d members." % (GameData.party_members.size()+1))
+
+func _show_quest_notification(text: String) -> void:
+	if is_instance_valid(quest_label):
+		quest_label.text = text
+	if is_instance_valid(quest_panel):
+		quest_panel.visible = true
+	_quest_show_timer = 4.5
+
 func _process(delta: float) -> void:
 	if shake_timer > 0:
 		shake_timer -= delta
-		var amount := (shake_timer / shake_duration) * shake_intensity
-		camera.offset = Vector2(randf_range(-amount, amount), randf_range(-amount, amount))
+		var a := (shake_timer / shake_duration) * shake_intensity
+		camera.offset = Vector2(randf_range(-a,a), randf_range(-a,a))
 	else:
 		camera.offset = Vector2.ZERO
 
@@ -341,50 +364,24 @@ func _process(delta: float) -> void:
 		if position == target_position:
 			_move_next_tile()
 
-func _setup_save_load_ui() -> void:
-	save_btn = Button.new()
-	save_btn.text = "Save"
-	save_btn.position = Vector2(20, 480)
-	save_btn.size = Vector2(90, 36)
-	save_btn.add_theme_font_size_override("font_size", 13)
-	save_btn.pressed.connect(_on_save_game)
-	ui_layer.add_child(save_btn)
+	if _quest_show_timer > 0:
+		_quest_show_timer -= delta
+		if _quest_show_timer <= 0 and is_instance_valid(quest_panel):
+			quest_panel.visible = false
 
-	load_btn = Button.new()
-	load_btn.text = "Load"
-	load_btn.position = Vector2(118, 480)
-	load_btn.size = Vector2(90, 36)
-	load_btn.add_theme_font_size_override("font_size", 13)
-	load_btn.pressed.connect(_on_load_game)
-	ui_layer.add_child(load_btn)
+	var b := GameData.get_ambient_brightness()
+	if is_instance_valid(body_rect):
+		var tinted := GameData.player_color * b
+		tinted.a = 1.0
+		body_rect.color = tinted
 
-	save_status_label = Label.new()
-	save_status_label.position = Vector2(20, 520)
-	save_status_label.text = ""
-	save_status_label.add_theme_font_size_override("font_size", 11)
-	save_status_label.modulate = Color(0.5, 0.8, 0.5)
-	ui_layer.add_child(save_status_label)
-
-func _on_save_game() -> void:
-	if GameData:
-		GameData.save_game()
-	if save_status_label:
-		save_status_label.text = "Saved!"
-	await get_tree().create_timer(2.0).timeout
-	if save_status_label:
-		save_status_label.text = ""
-
-func _on_load_game() -> void:
-	if FileAccess.file_exists("user://save.dat"):
-		if GameData:
-			GameData.load_game()
-		if save_status_label:
-			save_status_label.text = "Loaded!"
-		await get_tree().create_timer(0.5).timeout
-		get_tree().change_scene_to_file("res://world.tscn")
-	else:
-		if save_status_label:
-			save_status_label.text = "No save file!"
-		await get_tree().create_timer(2.0).timeout
-		if save_status_label:
-			save_status_label.text = ""
+	if is_instance_valid(hp_label):
+		hp_label.text = "HP  %d / %d" % [GameData.player_hp, GameData.player_max_hp]
+	if is_instance_valid(level_label):
+		level_label.text = "Lv.%d  XP %d/%d  STR%d INT%d DEX%d LCK%d" % [
+			GameData.player_level, GameData.player_xp, GameData.player_level*120,
+			GameData.attr_str, GameData.attr_int, GameData.attr_dex, GameData.attr_luck]
+	if is_instance_valid(familiarity_label):
+		familiarity_label.text = "Terrain %.1f  |  Dodge +%.0f%%" % [GameData.terrain_familiarity, GameData.get_dodge_bonus()*100]
+	if is_instance_valid(time_label):
+		time_label.text = GameData.get_time_label()
